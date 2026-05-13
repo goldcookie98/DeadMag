@@ -2,6 +2,8 @@
 
 2D online multiplayer platformer shooter. HTML5 Canvas + Node.js WebSockets.
 
+**Play:** https://goldcookie98.github.io/DeadMag/
+
 ## Modes
 
 **Horde** — 2–4 player co-op. Survive zombie waves on a platform map. Killing zombies earns cash. Between waves, the shop opens: new guns, damage/fire-rate/reload upgrades, armour, move speed. Run ends when the team is out of lives.
