@@ -76,7 +76,7 @@ export class UI {
     this.el.lobbyStart.style.opacity = canStart ? "1" : "0.4";
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, reloading, lives, arsenalProgress }) {
+  setHUD({ mode, wave, cash, weapon, ammo, reloading, lives, arsenalProgress, autoFire }) {
     this.el.mode.textContent = mode ? `MODE · ${mode.toUpperCase()}` : "";
     if (mode === "horde") {
       this.el.wave.textContent = wave > 0 ? `WAVE ${wave}` : "STANDBY";
@@ -85,7 +85,8 @@ export class UI {
       this.el.wave.textContent = arsenalProgress ? `${arsenalProgress.done}/${arsenalProgress.total}` : "";
       this.el.cash.textContent = "";
     }
-    this.el.weapon.textContent = weapon ? `[${WEAPONS[weapon].name}]` : "";
+    const auto = autoFire ? " · AUTO" : "";
+    this.el.weapon.textContent = weapon ? `[${WEAPONS[weapon].name}]${auto}` : "";
     this.el.ammo.textContent = reloading ? "RELOADING…" : (ammo === Infinity ? "∞" : `${ammo}`);
     this.el.lives.textContent = lives != null ? `LIVES · ${lives}` : "";
   }

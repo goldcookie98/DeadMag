@@ -13,13 +13,16 @@ export class Input {
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
     this.reloadPressed = false;
     this.escapePressed = false;
+    this.autoFire = false;
     this._enabled = true;
 
     window.addEventListener("keydown", (e) => {
       if (!this._enabled) return;
+      const wasDown = this.keys.has(e.code);
       this.keys.add(e.code);
       if (KEYS.reload.has(e.code)) this.reloadPressed = true;
       if (KEYS.escape.has(e.code)) this.escapePressed = true;
+      if (!wasDown && e.code === "KeyE") this.autoFire = !this.autoFire;
       if (e.code === "Space") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
@@ -65,7 +68,7 @@ export class Input {
     return {
       mx, my,
       aimX: wx, aimY: wy,
-      shoot: this.mouse.down,
+      shoot: this.mouse.down || this.autoFire,
       reload: this.consumeReload(),
     };
   }

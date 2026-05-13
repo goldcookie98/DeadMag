@@ -255,5 +255,6 @@ function updateHUD() {
     reloading: sim.timeMs < me.reloadingUntil,
     lives: me.lives,
     arsenalProgress,
+    autoFire: input.autoFire,
   });
 }
