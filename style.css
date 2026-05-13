@@ -131,19 +131,22 @@ button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px r
 .lobby-buttons { display: flex; gap: 8px; margin-top: 16px; }
 .lobby-buttons button { flex: 1; }
 
-#join-code, #join-server {
+#join-code {
   width: 100%;
   font-family: inherit;
   background: transparent;
-  color: var(--neon-cyan);
+  color: var(--neon-yellow);
   border: 1px solid var(--dim-2);
-  padding: 12px;
-  font-size: 14px;
+  padding: 16px;
+  font-size: 28px;
   margin: 8px 0;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.4em;
   text-transform: uppercase;
+  text-align: center;
+  text-shadow: 0 0 10px rgba(255,212,0,0.4);
 }
-#join-server { text-transform: none; letter-spacing: 0; }
+#join-code:focus { outline: none; border-color: var(--neon-yellow); box-shadow: 0 0 10px rgba(255,212,0,0.3); }
+.join-hint { color: var(--dim); font-size: 12px; letter-spacing: 0.1em; margin-bottom: 8px; }
 
 #shop-grid {
   display: grid;

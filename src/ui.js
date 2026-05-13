@@ -25,7 +25,6 @@ export class UI {
       lobbyStart: document.getElementById("lobby-start"),
       lobbyLeave: document.getElementById("lobby-leave"),
       joinCode: document.getElementById("join-code"),
-      joinServer: document.getElementById("join-server"),
       joinGo: document.getElementById("join-go"),
       joinBack: document.getElementById("join-back"),
       shopGrid: document.getElementById("shop-grid"),
@@ -52,7 +51,10 @@ export class UI {
     });
     this.el.lobbyStart.addEventListener("click", () => this.handlers.startGame?.());
     this.el.lobbyLeave.addEventListener("click", () => this.handlers.leave?.());
-    this.el.joinGo.addEventListener("click", () => this.handlers.joinSubmit?.(this.el.joinCode.value.trim().toUpperCase(), this.el.joinServer.value.trim()));
+    this.el.joinGo.addEventListener("click", () => this.handlers.joinSubmit?.(this.el.joinCode.value.trim().toUpperCase()));
+    this.el.joinCode.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.handlers.joinSubmit?.(this.el.joinCode.value.trim().toUpperCase());
+    });
     this.el.joinBack.addEventListener("click", () => this.handlers.leave?.());
     this.el.shopReady.addEventListener("click", () => this.handlers.shopReady?.());
     this.el.goBack.addEventListener("click", () => this.handlers.leave?.());

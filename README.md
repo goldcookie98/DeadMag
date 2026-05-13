@@ -27,13 +27,9 @@ npm run dev
 Open http://localhost:8000 — Solo Horde and Arsenal-vs-bots run entirely in the browser, no server needed. Same on the GitHub Pages live URL.
 
 ### Multiplayer
-```bash
-npm install
-npm run server
-```
-Server listens on `ws://localhost:8080`. In the client, pick **CREATE LOBBY** → share the 4-char room code, others **JOIN LOBBY** with that code + the server URL.
+No server, no setup. Click **CREATE LOBBY** to get a 4-character code, share it with a friend, they click **JOIN LOBBY** and type the code. WebRTC peer-to-peer via [trystero](https://github.com/dmotz/trystero) over public Nostr relays — works from the live site as-is. The player who created the lobby is the authoritative host; if they leave, the game ends.
 
-To play multiplayer over the public site, you need to host the server somewhere reachable (Render / Fly / Railway / a VPS) and paste that `wss://...` URL into the join screen.
+(A standalone WebSocket server still lives in `server/` for dedicated hosting if you'd rather run it that way: `npm install && npm run server`.)
 
 ## Versioning
 

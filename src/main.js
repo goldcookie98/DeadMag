@@ -3,7 +3,7 @@ import { Camera } from "./camera.js";
 import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, CONSTANTS } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
-import { Net } from "./net.js";
+import { Mp, SELF_ID } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { mountVersion } from "./version-display.js";
 
@@ -19,11 +19,13 @@ let state = "menu";
 let mode = "horde";
 let sim = null;
 let localId = null;
-let net = null;
+let mp = null;
 let roomCode = null;
 let isHost = false;
 let lobby = { players: [], mode: "horde" };
-let killfeedSeen = new Set();
+let peerIdToPlayerId = new Map();
+const COLOR_FOR = (i) => COLORS[i % COLORS.length];
+let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -39,19 +41,26 @@ ui.showOnly("menu");
 ui.setNetStatus("");
 
 ui.on("action", onMenuAction);
-ui.on("setMode", (m) => { lobby.mode = m; renderLobby(); });
+ui.on("setMode", (m) => {
+  if (mp && !mp.isHost) return;
+  lobby.mode = m;
+  if (mp?.isHost) mp.setMode(m);
+  renderLobby();
+});
 ui.on("startGame", () => {
-  if (net) net.send("start", { mode: lobby.mode });
+  if (mp?.isHost) hostStartGame();
 });
 ui.on("leave", leaveToMenu);
 ui.on("joinSubmit", joinSubmit);
-ui.on("shopReady", () => { if (net) net.send("shop-ready"); });
+ui.on("shopReady", () => {});
 ui.on("buy", (id) => {
-  if (net) net.send("buy", { itemId: id });
+  if (mp?.isHost) shopBuy(sim, localId, id);
+  else if (mp) mp.sendBuy(id);
   else if (sim) shopBuy(sim, localId, id);
 });
 ui.on("equip", (wid) => {
-  if (net) net.send("equip", { weapon: wid });
+  if (mp?.isHost) switchWeapon(sim, localId, wid);
+  else if (mp) mp.sendEquip(wid);
   else if (sim) switchWeapon(sim, localId, wid);
 });
 
@@ -75,73 +84,113 @@ function startSolo(m) {
 }
 
 async function createLobby() {
-  const url = await promptServerUrl("ws://localhost:8080");
-  if (!url) return;
+  ui.showOnly("lobby");
+  ui.setNetStatus("CONNECTING…");
+  ui.setLobby({ code: "----", title: "LOBBY · HOST", players: [{ name: myName, host: true }], mode: "horde", canStart: false });
   try {
-    net = await connectNet(url);
-    net.send("create", { name: "P_" + Math.floor(Math.random() * 999) });
+    mp = new Mp();
+    setupMpHandlers();
+    const code = await mp.create(myName);
+    roomCode = code;
     isHost = true;
     state = "lobby";
-    ui.showOnly("lobby");
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: SELF_ID };
+    renderLobby();
+    ui.setNetStatus("ONLINE · P2P");
   } catch (e) {
-    alert("Couldn't connect: " + (e?.message ?? e));
+    alert("Couldn't open room: " + (e?.message ?? e));
+    leaveToMenu();
   }
 }
 
 function openJoin() {
   ui.showOnly("join");
+  setTimeout(() => document.getElementById("join-code")?.focus(), 50);
 }
 
-async function joinSubmit(code, urlInput) {
+async function joinSubmit(code) {
+  code = (code || "").toUpperCase();
   if (!/^[A-Z0-9]{4}$/.test(code)) { alert("Code must be 4 chars."); return; }
-  const url = urlInput || "ws://localhost:8080";
+  ui.showOnly("lobby");
+  ui.setNetStatus("CONNECTING…");
+  ui.setLobby({ code, title: "LOBBY", players: [], mode: "horde", canStart: false });
   try {
-    net = await connectNet(url);
-    net.send("join", { code, name: "P_" + Math.floor(Math.random() * 999) });
+    mp = new Mp();
+    setupMpHandlers();
+    await mp.join(code, myName);
+    roomCode = code;
     isHost = false;
     state = "lobby";
-    ui.showOnly("lobby");
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: null };
+    renderLobby();
+    ui.setNetStatus("ONLINE · P2P");
   } catch (e) {
-    alert("Couldn't connect: " + (e?.message ?? e));
-  }
-}
-
-async function promptServerUrl(def) {
-  const v = prompt("Server URL (or leave blank for default):", def);
-  if (v === null) return null;
-  return v.trim() || def;
-}
-
-function connectNet(url) {
-  const handlers = {
-    onMessage: onNetMessage,
-    onClose: () => { ui.setNetStatus("DISCONNECTED"); },
-  };
-  const n = new Net(url, handlers);
-  ui.setNetStatus("CONNECTING…");
-  return n.connect().then(() => { ui.setNetStatus("ONLINE"); return n; });
-}
-
-function onNetMessage(m) {
-  if (m.type === "welcome") {
-    roomCode = m.code;
-    localId = m.playerId;
-    lobby = { players: m.players, mode: m.mode, hostId: m.hostId };
-    renderLobby();
-  } else if (m.type === "lobby") {
-    lobby = { players: m.players, mode: m.mode, hostId: m.hostId };
-    renderLobby();
-  } else if (m.type === "start") {
-    mode = m.mode;
-    state = "playing";
-    ui.showOnly();
-  } else if (m.type === "state") {
-    sim = inflateState(m.state);
-    if (sim.events?.length) processEvents(sim);
-  } else if (m.type === "error") {
-    alert("Server: " + m.message);
+    alert("Couldn't join: " + (e?.message ?? e));
     leaveToMenu();
   }
+}
+
+function setupMpHandlers() {
+  mp.on("peers", () => {
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.roster().find((p) => p.host)?.id };
+    renderLobby();
+  });
+  mp.on("modeChanged", () => {
+    lobby.mode = mp.lobbyMode;
+    renderLobby();
+  });
+  mp.on("start", (data) => {
+    mode = data.mode;
+    peerIdToPlayerId = new Map(Object.entries(data.mapping));
+    localId = peerIdToPlayerId.get(SELF_ID);
+    state = "playing";
+    sim = createSim(mode);
+    ui.showOnly();
+  });
+  mp.on("state", (data) => {
+    sim = inflateState(data);
+    if (sim.events?.length) processEvents(sim);
+  });
+  mp.on("peerInput", (peerId, data) => {
+    if (!sim) return;
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null) setInput(sim, pid, data);
+  });
+  mp.on("peerBuy", (peerId, data) => {
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null && sim) shopBuy(sim, pid, data.itemId);
+  });
+  mp.on("peerEquip", (peerId, data) => {
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null && sim) switchWeapon(sim, pid, data.weapon);
+  });
+  mp.on("peerLeft", (peerId) => {
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null && sim) removePlayer(sim, pid);
+    peerIdToPlayerId.delete(peerId);
+  });
+}
+
+function hostStartGame() {
+  if (!mp?.isHost) return;
+  const m = lobby.mode || "horde";
+  mode = m;
+  sim = createSim(m);
+  peerIdToPlayerId = new Map();
+  const mapping = {};
+  const meP = addPlayer(sim, myName, COLOR_FOR(0), false);
+  mapping[SELF_ID] = meP.id;
+  peerIdToPlayerId.set(SELF_ID, meP.id);
+  let idx = 1;
+  for (const [peerId, peer] of mp.peers) {
+    const p = addPlayer(sim, peer.name, COLOR_FOR(idx++), false);
+    mapping[peerId] = p.id;
+    peerIdToPlayerId.set(peerId, p.id);
+  }
+  localId = meP.id;
+  state = "playing";
+  ui.showOnly();
+  mp.startGame(m, mapping);
 }
 
 function inflateState(s) {
@@ -150,19 +199,49 @@ function inflateState(s) {
   return s;
 }
 
+function serializeSimForNet(sim) {
+  return {
+    mode: sim.mode,
+    tick: sim.tick,
+    timeMs: sim.timeMs,
+    wave: sim.wave,
+    waveActive: sim.waveActive,
+    shopOpen: sim.shopOpen,
+    shopOpenUntil: sim.shopOpenUntil,
+    gameOver: sim.gameOver,
+    winnerId: sim.winnerId,
+    events: sim.events,
+    players: [...sim.players.values()].map((p) => ({
+      id: p.id, name: p.name, color: p.color,
+      x: p.x, y: p.y, angle: p.angle,
+      hp: p.hp, maxHp: p.maxHp, armor: p.armor,
+      weapon: p.weapon, inventory: p.inventory, ammo: p.ammo,
+      reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
+      cash: p.cash, lives: p.lives, alive: p.alive,
+      upgrades: p.upgrades,
+      arsenalKills: [...p.arsenalKills],
+      score: p.score,
+    })),
+    zombies: sim.zombies.map((z) => ({ id: z.id, x: z.x, y: z.y, hp: z.hp, maxHp: z.maxHp })),
+    bullets: sim.bullets.map((b) => ({ id: b.id, x: b.x, y: b.y, vx: b.vx, vy: b.vy, weapon: b.weapon })),
+    explosions: sim.explosions.map((e) => ({ x: e.x, y: e.y, r: e.r, t: e.t })),
+  };
+}
+
 function renderLobby() {
   ui.setLobby({
     code: roomCode || "----",
     title: isHost ? "LOBBY · HOST" : "LOBBY",
-    players: lobby.players.map((p) => ({ name: p.name, host: p.id === lobby.hostId })),
+    players: lobby.players.map((p) => ({ name: p.name, host: p.host || p.id === lobby.hostId })),
     mode: lobby.mode,
     canStart: isHost && lobby.players.length >= 1,
   });
 }
 
 function leaveToMenu() {
-  if (net) net.close();
-  net = null; sim = null; roomCode = null;
+  if (mp) mp.leave();
+  mp = null; sim = null; roomCode = null;
+  peerIdToPlayerId = new Map();
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
@@ -174,17 +253,18 @@ function frame(now) {
   last = now;
 
   if (state === "playing" && sim) {
-    if (!net) {
-      const me = sim.players.get(localId);
-      if (me) {
-        const snap = input.snapshot(camera);
-        setInput(sim, localId, snap);
-      }
+    const snap = input.snapshot(camera);
+    if (!mp) {
+      if (sim.players.get(localId)) setInput(sim, localId, snap);
       step(sim, dt);
       processEvents(sim);
+    } else if (mp.isHost) {
+      if (sim.players.get(localId)) setInput(sim, localId, snap);
+      step(sim, dt);
+      processEvents(sim);
+      mp.broadcastState(serializeSimForNet(sim));
     } else {
-      const snap = input.snapshot(camera);
-      net.send("input", { input: snap });
+      mp.sendInput(snap);
     }
 
     const me = sim.players.get(localId);

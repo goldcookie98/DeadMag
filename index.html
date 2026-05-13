@@ -62,10 +62,10 @@
     <div id="join" class="overlay hidden">
       <div class="panel">
         <h2>JOIN LOBBY</h2>
-        <input id="join-code" maxlength="4" placeholder="CODE" />
-        <input id="join-server" placeholder="ws://localhost:8080" />
+        <div class="join-hint">Type the 4-character code your friend shared.</div>
+        <input id="join-code" maxlength="4" placeholder="CODE" autocomplete="off" />
         <div class="lobby-buttons">
-          <button id="join-go">JOIN</button>
+          <button id="join-go" class="primary">JOIN</button>
           <button id="join-back">BACK</button>
         </div>
       </div>
