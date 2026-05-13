@@ -1,0 +1,24 @@
+#!/bin/sh
+# Auto-bumps version.json patch number on every commit, then stages it
+# so the bump lands in the same commit. Result: every push ships a new version.
+
+# Skip on merge/squash/amend message sources to avoid surprising rewrites.
+case "$2" in
+  merge|squash) exit 0 ;;
+esac
+
+ROOT="$(git rev-parse --show-toplevel)"
+FILE="$ROOT/version.json"
+[ -f "$FILE" ] || exit 0
+
+CURRENT=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FILE" | head -n1)
+[ -n "$CURRENT" ] || CURRENT="0.0.0"
+
+MAJOR=$(printf '%s' "$CURRENT" | cut -d. -f1)
+MINOR=$(printf '%s' "$CURRENT" | cut -d. -f2)
+PATCH=$(printf '%s' "$CURRENT" | cut -d. -f3)
+NEXT_PATCH=$((PATCH + 1))
+NEXT="$MAJOR.$MINOR.$NEXT_PATCH"
+
+printf '{ "version": "%s" }\n' "$NEXT" > "$FILE"
+git add "$FILE" >/dev/null 2>&1 || true

@@ -1,0 +1,40 @@
+:root {
+  --bg: #07070b;
+  --neon-cyan: #00ffd1;
+  --neon-pink: #ff2e6c;
+  --dim: #5a5a6e;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--neon-cyan);
+  cursor: crosshair;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+#version {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  text-shadow: 0 0 6px rgba(0, 255, 209, 0.25);
+  pointer-events: none;
+  user-select: none;
+}

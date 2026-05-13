@@ -1,0 +1,9 @@
+{
+  "name": "deadmag",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes http-server -p 8000 -c-1 -s ."
+  }
+}
