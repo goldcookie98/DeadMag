@@ -26,6 +26,7 @@ export function makePlayer(name, color, isBot = false) {
     inventory: { pistol: true },
     ammo: WEAPONS.pistol.mag,
     reloadingUntil: 0,
+    reloadDuration: 0,
     lastShotAt: 0,
     cash: 0,
     lives: 3,
@@ -216,7 +217,10 @@ function startReload(sim, p) {
   const w = WEAPONS[p.weapon];
   if (w.kind === "melee") return;
   if (p.ammo >= w.mag) return;
-  p.reloadingUntil = sim.timeMs + w.reload * reloadMulFor(p);
+  if (sim.timeMs < p.reloadingUntil) return;
+  const dur = w.reload * reloadMulFor(p);
+  p.reloadDuration = dur;
+  p.reloadingUntil = sim.timeMs + dur;
 }
 
 function finishReloads(sim) {
@@ -224,6 +228,7 @@ function finishReloads(sim) {
     if (p.reloadingUntil > 0 && sim.timeMs >= p.reloadingUntil) {
       p.ammo = WEAPONS[p.weapon].mag;
       p.reloadingUntil = 0;
+      p.reloadDuration = 0;
     }
   }
 }

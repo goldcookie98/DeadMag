@@ -119,6 +119,7 @@ function serializeSim(sim) {
       hp: p.hp, maxHp: p.maxHp, armor: p.armor,
       weapon: p.weapon, inventory: p.inventory, ammo: p.ammo,
       reloadingUntil: p.reloadingUntil,
+      reloadDuration: p.reloadDuration,
       cash: p.cash, lives: p.lives, alive: p.alive,
       upgrades: p.upgrades,
       arsenalKills: [...p.arsenalKills],

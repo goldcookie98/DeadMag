@@ -15,6 +15,8 @@ export class UI {
       cash: document.getElementById("hud-cash"),
       weapon: document.getElementById("hud-weapon"),
       ammo: document.getElementById("hud-ammo"),
+      reload: document.getElementById("hud-reload"),
+      reloadBar: document.getElementById("hud-reload-bar"),
       lives: document.getElementById("hud-lives"),
       killfeed: document.getElementById("hud-killfeed"),
       lobbyCode: document.getElementById("lobby-code"),
@@ -76,7 +78,7 @@ export class UI {
     this.el.lobbyStart.style.opacity = canStart ? "1" : "0.4";
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, reloading, lives, arsenalProgress, autoFire }) {
+  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire }) {
     this.el.mode.textContent = mode ? `MODE · ${mode.toUpperCase()}` : "";
     if (mode === "horde") {
       this.el.wave.textContent = wave > 0 ? `WAVE ${wave}` : "STANDBY";
@@ -87,7 +89,27 @@ export class UI {
     }
     const auto = autoFire ? " · AUTO" : "";
     this.el.weapon.textContent = weapon ? `[${WEAPONS[weapon].name}]${auto}` : "";
-    this.el.ammo.textContent = reloading ? "RELOADING…" : (ammo === Infinity ? "∞" : `${ammo}`);
+
+    if (ammo === Infinity) {
+      this.el.ammo.textContent = "∞";
+      this.el.ammo.className = "";
+    } else if (reloading) {
+      this.el.ammo.textContent = "RELOAD";
+      this.el.ammo.className = "reloading";
+    } else {
+      this.el.ammo.textContent = `${ammo} / ${mag}`;
+      this.el.ammo.className = ammo / mag <= 0.25 ? "low" : "";
+    }
+
+    if (reloading) {
+      this.el.reload.classList.add("active");
+      const pct = Math.max(0, Math.min(100, (reloadProgress ?? 0) * 100));
+      this.el.reloadBar.style.width = `${pct}%`;
+    } else {
+      this.el.reload.classList.remove("active");
+      this.el.reloadBar.style.width = "0%";
+    }
+
     this.el.lives.textContent = lives != null ? `LIVES · ${lives}` : "";
   }
 

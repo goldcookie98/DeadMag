@@ -246,13 +246,19 @@ function updateHUD() {
   if (!me) return;
   const w = WEAPONS[me.weapon];
   const arsenalProgress = sim.mode === "arsenal" ? { done: me.arsenalKills.size, total: ARSENAL_ORDER.length } : null;
+  const reloading = sim.timeMs < me.reloadingUntil;
+  const reloadProgress = reloading && me.reloadDuration > 0
+    ? 1 - (me.reloadingUntil - sim.timeMs) / me.reloadDuration
+    : 0;
   ui.setHUD({
     mode: sim.mode,
     wave: sim.wave,
     cash: me.cash,
     weapon: me.weapon,
     ammo: w.kind === "melee" ? Infinity : me.ammo,
-    reloading: sim.timeMs < me.reloadingUntil,
+    mag: w.mag,
+    reloading,
+    reloadProgress,
     lives: me.lives,
     arsenalProgress,
     autoFire: input.autoFire,
