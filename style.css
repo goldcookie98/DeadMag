@@ -1,22 +1,25 @@
 :root {
   --bg: #07070b;
+  --bg-2: #0d0d14;
   --neon-cyan: #00ffd1;
   --neon-pink: #ff2e6c;
+  --neon-yellow: #ffd400;
   --dim: #5a5a6e;
+  --dim-2: #2a2a36;
+  --danger: #ff2e6c;
+  --good: #00ffd1;
 }
 
 * { box-sizing: border-box; }
 
 html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
+  margin: 0; padding: 0; width: 100%; height: 100%;
   background: var(--bg);
   overflow: hidden;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color: var(--neon-cyan);
   cursor: crosshair;
+  user-select: none;
 }
 
 #game {
@@ -27,14 +30,195 @@ html, body {
   image-rendering: crisp-edges;
 }
 
+.hidden { display: none !important; }
+
+.overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.35), rgba(7,7,11,0.95));
+  backdrop-filter: blur(2px);
+  z-index: 10;
+}
+
+.title h1 {
+  font-size: 80px;
+  margin: 0;
+  letter-spacing: 0.08em;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 12px var(--neon-cyan), 0 0 24px rgba(0,255,209,0.4);
+}
+.title h1 span {
+  color: var(--neon-pink);
+  text-shadow: 0 0 12px var(--neon-pink), 0 0 24px rgba(255,46,108,0.4);
+}
+.title .subtitle {
+  text-align: center;
+  color: var(--dim);
+  letter-spacing: 0.2em;
+  margin-bottom: 32px;
+}
+
+.menu-buttons {
+  display: flex; flex-direction: column; gap: 10px;
+  width: 320px;
+}
+
+button {
+  font-family: inherit;
+  background: transparent;
+  color: var(--neon-cyan);
+  border: 1px solid var(--neon-cyan);
+  padding: 12px 16px;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.12s;
+  box-shadow: 0 0 0 rgba(0,255,209,0.0);
+}
+button:hover {
+  background: rgba(0,255,209,0.08);
+  box-shadow: 0 0 12px rgba(0,255,209,0.4);
+}
+button:active { transform: translateY(1px); }
+button.primary { color: var(--neon-pink); border-color: var(--neon-pink); }
+button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px rgba(255,46,108,0.4); }
+
+.menu-foot {
+  position: fixed; bottom: 24px; left: 0; right: 0;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+.panel {
+  background: rgba(13,13,20,0.92);
+  border: 1px solid var(--neon-cyan);
+  padding: 28px 32px;
+  min-width: 360px;
+  box-shadow: 0 0 24px rgba(0,255,209,0.18);
+}
+.panel.wide { min-width: 640px; max-width: 800px; }
+.panel h2 {
+  margin: 0 0 16px 0;
+  letter-spacing: 0.15em;
+  color: var(--neon-pink);
+  text-shadow: 0 0 10px rgba(255,46,108,0.5);
+}
+
+#lobby-code {
+  color: var(--neon-yellow);
+  font-size: 32px;
+  letter-spacing: 0.3em;
+  text-shadow: 0 0 12px rgba(255,212,0,0.5);
+}
+#lobby-code-row, #lobby-mode-row { margin: 10px 0; }
+#lobby-players {
+  margin: 16px 0;
+  min-height: 60px;
+  font-size: 13px;
+}
+#lobby-players .row {
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--dim-2);
+}
+
+.mode-btn { padding: 6px 12px; font-size: 12px; margin-left: 6px; }
+.mode-btn.selected { background: rgba(0,255,209,0.15); box-shadow: 0 0 8px rgba(0,255,209,0.4); }
+
+.lobby-buttons { display: flex; gap: 8px; margin-top: 16px; }
+.lobby-buttons button { flex: 1; }
+
+#join-code, #join-server {
+  width: 100%;
+  font-family: inherit;
+  background: transparent;
+  color: var(--neon-cyan);
+  border: 1px solid var(--dim-2);
+  padding: 12px;
+  font-size: 14px;
+  margin: 8px 0;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+#join-server { text-transform: none; letter-spacing: 0; }
+
+#shop-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+.shop-card {
+  border: 1px solid var(--dim-2);
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.shop-card:hover { border-color: var(--neon-cyan); box-shadow: 0 0 10px rgba(0,255,209,0.25); }
+.shop-card.disabled { opacity: 0.35; cursor: not-allowed; }
+.shop-card .name { color: var(--neon-pink); font-size: 13px; letter-spacing: 0.1em; }
+.shop-card .cost { color: var(--neon-yellow); font-size: 12px; margin-top: 4px; }
+.shop-card .desc { color: var(--dim); font-size: 11px; margin-top: 6px; line-height: 1.4; }
+#shop-cash { color: var(--neon-yellow); font-size: 18px; margin-bottom: 8px; }
+#shop-timer { color: var(--neon-yellow); }
+
+#hud {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+#hud-top {
+  position: absolute; top: 12px; left: 12px; right: 12px;
+  display: flex; justify-content: space-between; gap: 24px;
+  font-size: 12px; letter-spacing: 0.15em;
+}
+#hud-mode { color: var(--dim); }
+#hud-wave { color: var(--neon-pink); text-shadow: 0 0 8px rgba(255,46,108,0.5); }
+#hud-cash { color: var(--neon-yellow); text-shadow: 0 0 8px rgba(255,212,0,0.4); }
+#hud-bottom {
+  position: absolute; bottom: 12px; left: 12px; right: 12px;
+  display: flex; justify-content: space-between; gap: 24px;
+  font-size: 13px; letter-spacing: 0.1em;
+}
+#hud-weapon { color: var(--neon-cyan); }
+#hud-ammo { color: var(--dim); }
+#hud-lives { color: var(--neon-pink); }
+#hud-killfeed {
+  position: absolute; top: 40px; right: 12px;
+  font-size: 11px;
+  text-align: right;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  line-height: 1.6;
+}
+#hud-killfeed .feed-row { animation: fadeOut 4s forwards; }
+@keyframes fadeOut {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+#net-status {
+  position: fixed; top: 8px; right: 8px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+  pointer-events: none;
+  z-index: 20;
+}
+
 #version {
-  position: fixed;
-  right: 8px;
-  bottom: 6px;
+  position: fixed; right: 8px; bottom: 6px;
   font-size: 11px;
   letter-spacing: 0.05em;
   color: var(--dim);
-  text-shadow: 0 0 6px rgba(0, 255, 209, 0.25);
+  text-shadow: 0 0 6px rgba(0,255,209,0.25);
   pointer-events: none;
-  user-select: none;
+  z-index: 20;
 }
+
+#gameover-title { color: var(--danger); }
+#gameover-title.win { color: var(--good); }
+#gameover-stats { margin: 12px 0 20px; font-size: 13px; color: var(--dim); line-height: 1.6; }

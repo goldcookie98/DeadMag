@@ -2,13 +2,92 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>DeadMag</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <canvas id="game"></canvas>
+
+    <div id="hud" class="hidden">
+      <div id="hud-top">
+        <div id="hud-mode"></div>
+        <div id="hud-wave"></div>
+        <div id="hud-cash"></div>
+      </div>
+      <div id="hud-bottom">
+        <div id="hud-weapon"></div>
+        <div id="hud-ammo"></div>
+        <div id="hud-lives"></div>
+      </div>
+      <div id="hud-killfeed"></div>
+    </div>
+
+    <div id="menu" class="overlay">
+      <div class="title">
+        <h1>DEAD<span>MAG</span></h1>
+        <div class="subtitle">// neon-soaked top-down massacre //</div>
+      </div>
+      <div class="menu-buttons">
+        <button data-action="solo-horde">SOLO · HORDE</button>
+        <button data-action="solo-arsenal">SOLO · ARSENAL (bots)</button>
+        <button data-action="mp-create">CREATE LOBBY</button>
+        <button data-action="mp-join">JOIN LOBBY</button>
+      </div>
+      <div class="menu-foot">WASD move · MOUSE aim · CLICK shoot · R reload · ESC menu</div>
+    </div>
+
+    <div id="lobby" class="overlay hidden">
+      <div class="panel">
+        <h2 id="lobby-title">LOBBY</h2>
+        <div id="lobby-code-row">
+          ROOM CODE: <span id="lobby-code">----</span>
+        </div>
+        <div id="lobby-mode-row">
+          MODE:
+          <button data-mode="horde" class="mode-btn">HORDE</button>
+          <button data-mode="arsenal" class="mode-btn">ARSENAL</button>
+        </div>
+        <div id="lobby-players"></div>
+        <div class="lobby-buttons">
+          <button id="lobby-start">START</button>
+          <button id="lobby-leave">LEAVE</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="join" class="overlay hidden">
+      <div class="panel">
+        <h2>JOIN LOBBY</h2>
+        <input id="join-code" maxlength="4" placeholder="CODE" />
+        <input id="join-server" placeholder="ws://localhost:8080" />
+        <div class="lobby-buttons">
+          <button id="join-go">JOIN</button>
+          <button id="join-back">BACK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="shop" class="overlay hidden">
+      <div class="panel wide">
+        <h2>SHOP · <span id="shop-timer">15</span>s</h2>
+        <div id="shop-cash">$0</div>
+        <div id="shop-grid"></div>
+        <button id="shop-ready">READY</button>
+      </div>
+    </div>
+
+    <div id="gameover" class="overlay hidden">
+      <div class="panel">
+        <h2 id="gameover-title">DEAD</h2>
+        <div id="gameover-stats"></div>
+        <button id="gameover-back">BACK TO MENU</button>
+      </div>
+    </div>
+
+    <div id="net-status"></div>
     <div id="version"></div>
+
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

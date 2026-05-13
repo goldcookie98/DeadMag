@@ -1,33 +1,50 @@
 # DeadMag
 
-2D online multiplayer platformer shooter. HTML5 Canvas + Node.js WebSockets.
-
 **Play:** https://goldcookie98.github.io/DeadMag/
+
+2D online top-down shooter. HTML5 Canvas + Node.js WebSockets.
 
 ## Modes
 
-**Horde** — 2–4 player co-op. Survive zombie waves on a platform map. Killing zombies earns cash. Between waves, the shop opens: new guns, damage/fire-rate/reload upgrades, armour, move speed. Run ends when the team is out of lives.
+**Horde** (co-op, 2–4) — Survive zombie waves. Kills earn cash. Between waves the shop opens: new guns, +damage/+fire-rate/+reload/+speed upgrades, armour, medkits, extra lives. Run ends when the team is out of lives.
 
-**Arsenal** — 2–8 player FFA. Everyone starts with the same gun. Each kill cycles the killer to the next weapon: pistol → shotgun → SMG → sniper → rocket launcher → knife. First to kill with every weapon wins.
+**Arsenal** (FFA, 2–8) — Everyone starts with the same gun. Each kill cycles **your** weapon to the next: pistol → shotgun → SMG → sniper → rocket → knife. First to land a kill with every weapon wins.
 
 ## Controls
 
-- `WASD` / arrows — move + jump
+- `WASD` / arrows — move (top-down, 8-way)
 - Mouse — aim
 - Left click — shoot
+- `R` — reload
+- `Esc` — back to menu
 
-## Dev
+## Run it
 
+### Client only (solo + bots)
 ```bash
 npm run dev
 ```
+Open http://localhost:8000 — Solo Horde and Arsenal-vs-bots run entirely in the browser, no server needed. Same on the GitHub Pages live URL.
 
-Then open http://localhost:8000.
+### Multiplayer
+```bash
+npm install
+npm run server
+```
+Server listens on `ws://localhost:8080`. In the client, pick **CREATE LOBBY** → share the 4-char room code, others **JOIN LOBBY** with that code + the server URL.
+
+To play multiplayer over the public site, you need to host the server somewhere reachable (Render / Fly / Railway / a VPS) and paste that `wss://...` URL into the join screen.
 
 ## Versioning
 
-`version.json` is auto-bumped by a `prepare-commit-msg` git hook on every commit, so every push lands a new version number. The number shows in the bottom-right corner of the canvas.
+`version.json` is auto-bumped by a `prepare-commit-msg` git hook on every commit, so every push lands a new version number. The number shows bottom-right.
+
+## Stack
+
+- Canvas + ES modules, no framework
+- Server-authoritative sim shared between client (solo) and server (multiplayer) — `src/sim.js`
+- `ws` for WebSockets
 
 ## Status
 
-Phase 1: single-player platformer core (movement, jumping, mouse aim, placeholder shooting). Multiplayer/networking/game modes come in later phases.
+First cut of every system from spec: top-down movement, mouse aim, shooting, 6 weapons, reload, zombies + waves, shop, lives, Arsenal gun cycle, lobby + room codes, server. Expect rough edges — open an issue / hit me up to iterate.

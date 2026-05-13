@@ -1,31 +1,72 @@
-const MOVE_LEFT = new Set(["KeyA", "ArrowLeft"]);
-const MOVE_RIGHT = new Set(["KeyD", "ArrowRight"]);
-const JUMP = new Set(["KeyW", "ArrowUp", "Space"]);
+const KEYS = {
+  up:    new Set(["KeyW", "ArrowUp"]),
+  down:  new Set(["KeyS", "ArrowDown"]),
+  left:  new Set(["KeyA", "ArrowLeft"]),
+  right: new Set(["KeyD", "ArrowRight"]),
+  reload: new Set(["KeyR"]),
+  escape: new Set(["Escape"]),
+};
 
-export function attachInput(canvas, game) {
-  const keys = new Set();
+export class Input {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    this.reloadPressed = false;
+    this.escapePressed = false;
+    this._enabled = true;
 
-  window.addEventListener("keydown", (e) => {
-    keys.add(e.code);
-    if (JUMP.has(e.code)) e.preventDefault();
-  });
-  window.addEventListener("keyup", (e) => keys.delete(e.code));
+    window.addEventListener("keydown", (e) => {
+      if (!this._enabled) return;
+      this.keys.add(e.code);
+      if (KEYS.reload.has(e.code)) this.reloadPressed = true;
+      if (KEYS.escape.has(e.code)) this.escapePressed = true;
+      if (e.code === "Space") e.preventDefault();
+    });
+    window.addEventListener("keyup", (e) => this.keys.delete(e.code));
+    window.addEventListener("blur", () => this.keys.clear());
 
-  canvas.addEventListener("mousemove", (e) => {
-    game.mouse.x = e.clientX;
-    game.mouse.y = e.clientY;
-  });
-  canvas.addEventListener("mousedown", () => {
-    game.mouse.down = true;
-    game.shoot();
-  });
-  canvas.addEventListener("mouseup", () => {
-    game.mouse.down = false;
-  });
+    canvas.addEventListener("mousemove", (e) => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+    });
+    canvas.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      this.mouse.down = true;
+      this.mouse.clicked = true;
+    });
+    canvas.addEventListener("mouseup", () => { this.mouse.down = false; });
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
 
-  game.readInput = () => ({
-    left: [...MOVE_LEFT].some((k) => keys.has(k)),
-    right: [...MOVE_RIGHT].some((k) => keys.has(k)),
-    jump: [...JUMP].some((k) => keys.has(k)),
-  });
+  setEnabled(v) {
+    this._enabled = v;
+    if (!v) this.keys.clear();
+  }
+
+  has(group) {
+    for (const k of KEYS[group]) if (this.keys.has(k)) return true;
+    return false;
+  }
+
+  consumeReload() { const v = this.reloadPressed; this.reloadPressed = false; return v; }
+  consumeEscape() { const v = this.escapePressed; this.escapePressed = false; return v; }
+  consumeClick() { const v = this.mouse.clicked; this.mouse.clicked = false; return v; }
+
+  snapshot(camera) {
+    let mx = 0, my = 0;
+    if (this.has("right")) mx += 1;
+    if (this.has("left"))  mx -= 1;
+    if (this.has("down"))  my += 1;
+    if (this.has("up"))    my -= 1;
+    const len = Math.hypot(mx, my) || 1;
+    mx /= len; my /= len;
+    const wx = camera ? camera.screenToWorldX(this.mouse.x) : this.mouse.x;
+    const wy = camera ? camera.screenToWorldY(this.mouse.y) : this.mouse.y;
+    return {
+      mx, my,
+      aimX: wx, aimY: wy,
+      shoot: this.mouse.down,
+      reload: this.consumeReload(),
+    };
+  }
 }
