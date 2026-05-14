@@ -5,10 +5,22 @@ import { render } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
+import { WALLS, MAP_W, MAP_H } from "./map.js";
 import { mountVersion } from "./version-display.js";
 import { mountCheats, applyCheat } from "./cheats.js";
 
 const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
+
+// MP tuning. The server ticks at 30Hz (33ms), so spamming inputs every browser
+// frame (60-144Hz) just wastes uplink; cap to the server's tick rate. The local
+// player is rendered via dead-reckoning from the current input so movement
+// doesn't have to wait for a full server round-trip — server snapshots softly
+// reel us back toward the authoritative position.
+const INPUT_SEND_INTERVAL_MS = 33;
+const PREDICT_BASE_SPEED = 220;
+const PREDICT_PLAYER_R = 14;
+const PREDICT_RECONCILE_RATE = 0.2;     // pull toward server pos each snapshot
+const PREDICT_HARD_SNAP_PX = 220;       // snap instantly past this drift
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -29,9 +41,11 @@ let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 // Snapshot interpolation: keep recent server states + wall-clock receive times.
 // We render the world at (now - RENDER_DELAY_MS), lerping between the bracketing pair,
 // so the 30Hz server tick stops feeling like 30Hz.
-const RENDER_DELAY_MS = 80;
+const RENDER_DELAY_MS = 100;
 const STATE_BUFFER_MAX_MS = 600;
 let stateBuffer = [];
+let predictMe = null;          // { x, y, angle } — local player's predicted pose
+let _lastInputSendAt = 0;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -206,6 +220,7 @@ function setupMpHandlers() {
     state = "playing";
     sim = createSim(mode);
     stateBuffer = [];
+    predictMe = null;
     ui.showOnly();
   });
   mp.on("state", (data) => {
@@ -216,6 +231,7 @@ function setupMpHandlers() {
       stateBuffer.shift();
     }
     sim = inflated;
+    reconcilePredict(inflated.players.get(localId));
     if (sim.events?.length) processEvents(sim);
   });
   mp.on("disconnected", (reason) => {
@@ -306,9 +322,68 @@ function renderLobby() {
 function leaveToMenu() {
   if (mp) mp.leave();
   mp = null; sim = null; roomCode = null;
+  predictMe = null;
+  stateBuffer = [];
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
+}
+
+// Mirrors sim.js's circle-vs-AABB wall collision so prediction respects walls
+// instead of letting the player visibly clip until reconciliation snaps them out.
+function predictCollideWalls(x, y, r) {
+  for (const w of WALLS) {
+    const nx = Math.max(w.x, Math.min(x, w.x + w.w));
+    const ny = Math.max(w.y, Math.min(y, w.y + w.h));
+    const dx = x - nx, dy = y - ny;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < r * r) {
+      const d = Math.sqrt(d2) || 0.01;
+      return { nx: dx / d, ny: dy / d, depth: r - d };
+    }
+  }
+  return null;
+}
+
+function advancePredict(dt, snap, me) {
+  if (!predictMe) {
+    predictMe = { x: me.x, y: me.y, angle: me.angle };
+    return;
+  }
+  let speed = PREDICT_BASE_SPEED + (me.upgrades?.speed ?? 0) * 35;
+  if (me.weapon === "knife") speed *= 1.5;
+  let nx = predictMe.x + snap.mx * speed * dt;
+  let ny = predictMe.y;
+  let h = predictCollideWalls(nx, ny, PREDICT_PLAYER_R);
+  if (h) nx += h.nx * h.depth;
+  ny += snap.my * speed * dt;
+  h = predictCollideWalls(nx, ny, PREDICT_PLAYER_R);
+  if (h) { nx += h.nx * h.depth; ny += h.ny * h.depth; }
+  predictMe.x = Math.max(PREDICT_PLAYER_R, Math.min(MAP_W - PREDICT_PLAYER_R, nx));
+  predictMe.y = Math.max(PREDICT_PLAYER_R, Math.min(MAP_H - PREDICT_PLAYER_R, ny));
+  predictMe.angle = Math.atan2(snap.aimY - predictMe.y, snap.aimX - predictMe.x);
+}
+
+function reconcilePredict(serverMe) {
+  if (!serverMe) return;
+  if (serverMe.state !== "alive") {
+    // Downed/dead: server is authoritative, no point predicting.
+    predictMe = { x: serverMe.x, y: serverMe.y, angle: serverMe.angle };
+    return;
+  }
+  if (!predictMe) {
+    predictMe = { x: serverMe.x, y: serverMe.y, angle: serverMe.angle };
+    return;
+  }
+  const dx = serverMe.x - predictMe.x;
+  const dy = serverMe.y - predictMe.y;
+  if (dx * dx + dy * dy > PREDICT_HARD_SNAP_PX * PREDICT_HARD_SNAP_PX) {
+    predictMe.x = serverMe.x;
+    predictMe.y = serverMe.y;
+    return;
+  }
+  predictMe.x += dx * PREDICT_RECONCILE_RATE;
+  predictMe.y += dy * PREDICT_RECONCILE_RATE;
 }
 
 let last = performance.now();
@@ -323,10 +398,27 @@ function frame(now) {
       step(sim, dt);
       processEvents(sim);
     } else {
-      mp.sendInput(snap);
+      const nowSend = performance.now();
+      if (nowSend - _lastInputSendAt >= INPUT_SEND_INTERVAL_MS) {
+        mp.sendInput(snap);
+        _lastInputSendAt = nowSend;
+      }
+      const meAuth = sim.players.get(localId);
+      if (meAuth && meAuth.state === "alive") advancePredict(dt, snap, meAuth);
+      else if (meAuth) predictMe = { x: meAuth.x, y: meAuth.y, angle: meAuth.angle };
     }
 
-    const renderSim = mp ? buildRenderSim() : sim;
+    let renderSim = mp ? buildRenderSim() : sim;
+    // Override the local player with the predicted pose so movement is
+    // responsive to input instead of waiting on the server round-trip.
+    if (mp && predictMe) {
+      const me = renderSim.players.get(localId);
+      if (me) {
+        const players = new Map(renderSim.players);
+        players.set(localId, { ...me, x: predictMe.x, y: predictMe.y, angle: predictMe.angle });
+        renderSim = { ...renderSim, players };
+      }
+    }
     const meRender = renderSim.players.get(localId);
     if (meRender) camera.follow(meRender.x, meRender.y);
 
