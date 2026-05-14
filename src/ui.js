@@ -17,6 +17,10 @@ export class UI {
       ammo: document.getElementById("hud-ammo"),
       reload: document.getElementById("hud-reload"),
       reloadBar: document.getElementById("hud-reload-bar"),
+      hpFill: document.getElementById("hud-hp-fill"),
+      hpText: document.getElementById("hud-hp-text"),
+      armorBar: document.getElementById("hud-armor-bar"),
+      armorFill: document.getElementById("hud-armor-fill"),
       lives: document.getElementById("hud-lives"),
       killfeed: document.getElementById("hud-killfeed"),
       lobbyCode: document.getElementById("lobby-code"),
@@ -80,9 +84,20 @@ export class UI {
     this.el.lobbyStart.style.opacity = canStart ? "1" : "0.4";
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs }) {
+  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs, hp, maxHp, armor }) {
     this._setStatusOverlay(playerState, bleedLeftMs, reviveProgressMs);
     this.el.mode.textContent = mode ? `MODE · ${mode.toUpperCase()}` : "";
+    if (this.el.hpFill) {
+      const hpPct = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
+      this.el.hpFill.style.width = `${hpPct}%`;
+      this.el.hpText.textContent = `${Math.max(0, Math.round(hp ?? 0))} / ${maxHp ?? 0}`;
+    }
+    if (this.el.armorBar) {
+      const a = Math.max(0, armor ?? 0);
+      const armorPct = Math.min(100, (a / 150) * 100);
+      this.el.armorBar.classList.toggle("active", a > 0);
+      this.el.armorFill.style.width = `${armorPct}%`;
+    }
     if (mode === "horde") {
       this.el.wave.textContent = wave > 0 ? `WAVE ${wave}` : "STANDBY";
       this.el.cash.textContent = `$${cash}`;

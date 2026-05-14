@@ -338,5 +338,8 @@ function updateHUD() {
     playerState: me.state,
     bleedLeftMs: me.state === "down" ? Math.max(0, me.bleedOutAt - sim.timeMs) : 0,
     reviveProgressMs: me.reviveProgress || 0,
+    hp: me.hp,
+    maxHp: me.maxHp,
+    armor: me.armor,
   });
 }

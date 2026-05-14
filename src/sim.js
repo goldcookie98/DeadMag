@@ -11,7 +11,7 @@ const SHOP_DURATION_MS = 15000;
 const WAVE_INTERMISSION_MS = 1500;
 const DOWN_BLEED_MS = 30000;
 const REVIVE_TIME_MS = 5000;
-const REVIVE_RANGE = PLAYER_R * 3.2;
+const REVIVE_RANGE = PLAYER_R * 5.5;
 
 let _id = 1;
 const nextId = () => _id++;
@@ -56,6 +56,9 @@ function makeZombie(x, y, wave) {
     speed: 90 * speedMul,
     dmg: 12 + Math.floor(wave * 1.5),
     lastHitAt: 0,
+    stuckMs: 0,
+    detourDir: 0,
+    detourUntil: 0,
   };
 }
 
@@ -123,6 +126,7 @@ function collideCircleWalls(x, y, r) {
 }
 
 function moveWithCollisions(ent, r, dx, dy) {
+  const ox = ent.x, oy = ent.y;
   ent.x += dx;
   let h = collideCircleWalls(ent.x, ent.y, r);
   if (h) { ent.x += h.nx * h.depth; ent.y += h.ny * h.depth; }
@@ -131,6 +135,7 @@ function moveWithCollisions(ent, r, dx, dy) {
   if (h) { ent.x += h.nx * h.depth; ent.y += h.ny * h.depth; }
   ent.x = Math.max(r, Math.min(MAP_W - r, ent.x));
   ent.y = Math.max(r, Math.min(MAP_H - r, ent.y));
+  return { dx: ent.x - ox, dy: ent.y - oy };
 }
 
 function lineHitsWall(x1, y1, x2, y2) {
@@ -163,12 +168,12 @@ function tryShoot(sim, p, input) {
   const w = WEAPONS[p.weapon];
   const now = sim.timeMs;
   if (now < p.reloadingUntil) return;
-  const rate = w.rate * rateMulFor(p);
-  if (now - p.lastShotAt < rate) return;
   if (w.kind !== "melee" && p.ammo <= 0) {
     startReload(sim, p);
     return;
   }
+  const rate = w.rate * rateMulFor(p);
+  if (now - p.lastShotAt < rate) return;
   p.lastShotAt = now;
 
   const dx = input.aimX - p.x;
@@ -218,7 +223,7 @@ function tryShoot(sim, p, input) {
     });
   }
   p.ammo -= 1;
-  if (p.ammo <= 0 && w.mag > 1) startReload(sim, p);
+  if (p.ammo <= 0 && w.kind === "ranged") startReload(sim, p);
 }
 
 function startReload(sim, p) {
@@ -471,16 +476,46 @@ function updateZombies(sim, dt) {
       if (d < best) { best = d; target = p; }
     }
     if (!target) continue;
-    const ang = Math.atan2(target.y - z.y, target.x - z.x);
+    const baseAng = Math.atan2(target.y - z.y, target.x - z.x);
+    let ang = baseAng;
+    if (sim.timeMs < z.detourUntil) ang = baseAng + z.detourDir;
     const dx = Math.cos(ang) * z.speed * dt;
     const dy = Math.sin(ang) * z.speed * dt;
-    moveWithCollisions(z, ZOMBIE_R, dx, dy);
+    const moved = moveWithCollisions(z, ZOMBIE_R, dx, dy);
+
+    const expected = z.speed * dt;
+    const actual = Math.hypot(moved.dx, moved.dy);
+    if (expected > 0.001 && actual < expected * 0.4) {
+      z.stuckMs += dt * 1000;
+      if (z.stuckMs > 120 && sim.timeMs >= z.detourUntil) {
+        const side = pickDetourSide(z, ZOMBIE_R, baseAng);
+        z.detourDir = side * (Math.PI / 2);
+        z.detourUntil = sim.timeMs + 350 + Math.random() * 300;
+      }
+    } else {
+      z.stuckMs = 0;
+    }
 
     if (best < ZOMBIE_R + PLAYER_R + 4 && sim.timeMs - z.lastHitAt > ZOMBIE_HIT_COOLDOWN) {
       z.lastHitAt = sim.timeMs;
       damagePlayer(sim, target, z.dmg, null);
     }
   }
+}
+
+function pickDetourSide(ent, r, baseAng) {
+  const probe = r * 1.6;
+  const leftAng = baseAng - Math.PI / 2;
+  const rightAng = baseAng + Math.PI / 2;
+  const lx = ent.x + Math.cos(leftAng) * probe;
+  const ly = ent.y + Math.sin(leftAng) * probe;
+  const rx = ent.x + Math.cos(rightAng) * probe;
+  const ry = ent.y + Math.sin(rightAng) * probe;
+  const leftBlocked = collideCircleWalls(lx, ly, r) != null;
+  const rightBlocked = collideCircleWalls(rx, ry, r) != null;
+  if (leftBlocked && !rightBlocked) return 1;
+  if (rightBlocked && !leftBlocked) return -1;
+  return Math.random() < 0.5 ? -1 : 1;
 }
 
 function updateHorde(sim) {
@@ -542,6 +577,8 @@ function updateRespawns(sim) {
 function updateBots(sim, dt) {
   for (const [, p] of sim.players) {
     if (!p.isBot || !p.alive) continue;
+    if (!p._bot) p._bot = { detourUntil: 0, detourDir: 0, lastX: p.x, lastY: p.y, stuckMs: 0, jitterSeed: (p.id * 9301 + 49297) % 233280 };
+    const bot = p._bot;
     let target = null, best = Infinity;
     if (sim.mode === "horde") {
       for (const z of sim.zombies) {
@@ -555,25 +592,53 @@ function updateBots(sim, dt) {
         if (d < best) { best = d; target = op; }
       }
     }
+
+    const w = WEAPONS[p.weapon];
+    const desiredBase = w.kind === "melee" ? 38 : 220;
+    const desiredJitter = (bot.jitterSeed % 100) * 1.2;
+    const desired = desiredBase + (w.kind === "melee" ? 0 : desiredJitter);
+
     let mx = 0, my = 0;
     if (target) {
       const dx = target.x - p.x, dy = target.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      const desired = WEAPONS[p.weapon].kind === "melee" ? 40 : 250;
       const sign = d < desired ? -1 : (d > desired + 80 ? 1 : 0);
-      mx = (dx / d) * sign;
-      my = (dy / d) * sign;
-      mx += (Math.random() - 0.5) * 0.4;
-      my += (Math.random() - 0.5) * 0.4;
+      let baseAng = Math.atan2(dy, dx);
+      if (sim.timeMs < bot.detourUntil) baseAng += bot.detourDir;
+      mx = Math.cos(baseAng) * sign;
+      my = Math.sin(baseAng) * sign;
+      const wob = ((bot.jitterSeed >> 4) % 7 - 3) * 0.06;
+      mx += (Math.sin(sim.timeMs * 0.003 + bot.jitterSeed) + wob) * 0.25;
+      my += (Math.cos(sim.timeMs * 0.0027 + bot.jitterSeed) - wob) * 0.25;
       const len = Math.hypot(mx, my) || 1;
       mx /= len; my /= len;
     }
+
+    const moved = Math.hypot(p.x - bot.lastX, p.y - bot.lastY);
+    const expected = moveSpeedFor(p) * dt;
+    if (target && expected > 0.001 && moved < expected * 0.4 && Math.hypot(mx, my) > 0.5) {
+      bot.stuckMs += dt * 1000;
+      if (bot.stuckMs > 120 && sim.timeMs >= bot.detourUntil) {
+        const baseAng = Math.atan2(target.y - p.y, target.x - p.x);
+        const side = pickDetourSide(p, PLAYER_R, baseAng);
+        bot.detourDir = side * (Math.PI / 2);
+        bot.detourUntil = sim.timeMs + 400 + Math.random() * 400;
+      }
+    } else {
+      bot.stuckMs = 0;
+    }
+    bot.lastX = p.x; bot.lastY = p.y;
+
+    const reloading = sim.timeMs < p.reloadingUntil;
+    const wantReload = w.kind !== "melee" && !reloading && p.ammo / w.mag <= 0.25 && p.ammo < w.mag;
+    const shootClear = target ? !lineHitsWall(p.x, p.y, target.x, target.y) : false;
+
     const input = {
       mx, my,
       aimX: target ? target.x : p.x + 10,
       aimY: target ? target.y : p.y,
-      shoot: !!target && best < 500,
-      reload: false,
+      shoot: !!target && best < 500 && shootClear && !reloading && (w.kind === "melee" || p.ammo > 0),
+      reload: wantReload,
     };
     sim.inputs.set(p.id, input);
   }

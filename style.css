@@ -189,17 +189,57 @@ button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px r
 #hud-cash { color: var(--neon-yellow); text-shadow: 0 0 8px rgba(255,212,0,0.4); }
 #hud-bottom {
   position: absolute; bottom: 12px; left: 12px; right: 12px;
-  display: flex; justify-content: space-between; gap: 24px;
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
   font-size: 13px; letter-spacing: 0.1em;
 }
-#hud-weapon { color: var(--neon-cyan); }
-#hud-ammo-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 120px; }
-#hud-ammo { color: var(--dim); font-size: 16px; letter-spacing: 0.15em; }
-#hud-ammo.reloading { color: var(--neon-yellow); text-shadow: 0 0 8px rgba(255,212,0,0.5); }
-#hud-ammo.low { color: var(--neon-pink); }
+#hud-bottom-left {
+  display: flex; flex-direction: column; gap: 6px; min-width: 260px;
+}
+#hud-hp-label {
+  color: var(--neon-pink); font-size: 11px; letter-spacing: 0.25em;
+  text-shadow: 0 0 6px rgba(255,46,108,0.5);
+}
+#hud-hp-bar {
+  position: relative;
+  width: 260px; height: 18px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--neon-pink);
+  box-shadow: 0 0 10px rgba(255,46,108,0.3);
+}
+#hud-hp-fill {
+  height: 100%; width: 100%;
+  background: linear-gradient(90deg, var(--neon-pink), #ff7da6);
+  box-shadow: 0 0 8px rgba(255,46,108,0.6);
+  transition: width 0.12s linear;
+}
+#hud-hp-text {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; letter-spacing: 0.2em; color: #fff;
+  text-shadow: 0 0 4px #000, 0 0 4px #000;
+}
+#hud-armor-bar {
+  width: 260px; height: 6px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid var(--neon-yellow);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+#hud-armor-bar.active { opacity: 1; }
+#hud-armor-fill {
+  height: 100%; width: 0%;
+  background: var(--neon-yellow);
+  box-shadow: 0 0 6px rgba(255,212,0,0.6);
+  transition: width 0.12s linear;
+}
+#hud-weapon { color: var(--neon-cyan); font-size: 14px; }
+#hud-ammo-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 180px; }
+#hud-ammo { color: var(--dim); font-size: 36px; letter-spacing: 0.12em; font-weight: 600; text-shadow: 0 0 10px rgba(0,255,209,0.25); }
+#hud-ammo.reloading { color: var(--neon-yellow); text-shadow: 0 0 12px rgba(255,212,0,0.7); }
+#hud-ammo.low { color: var(--neon-pink); text-shadow: 0 0 12px rgba(255,46,108,0.7); }
 #hud-reload {
-  width: 120px;
-  height: 4px;
+  width: 180px;
+  height: 5px;
   background: rgba(0,0,0,0.6);
   border: 1px solid var(--dim-2);
   opacity: 0;
@@ -212,7 +252,8 @@ button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px r
   background: var(--neon-yellow);
   box-shadow: 0 0 8px rgba(255,212,0,0.6);
 }
-#hud-lives { color: var(--neon-pink); }
+#hud-lives { color: var(--neon-pink); font-size: 12px; letter-spacing: 0.2em; }
+#hud-bottom-right { min-width: 180px; }
 #hud-killfeed {
   position: absolute; top: 40px; right: 12px;
   font-size: 11px;

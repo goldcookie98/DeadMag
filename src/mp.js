@@ -5,6 +5,8 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", ""]);
 
 function isLocalHost() { return LOCAL_HOSTS.has(location.hostname); }
 
+const DEFAULT_REMOTE_SERVER = "wss://deadmag-server.onrender.com";
+
 export function getSavedServerUrl() {
   const q = new URLSearchParams(location.search).get("server");
   if (q) {
@@ -16,7 +18,7 @@ export function getSavedServerUrl() {
     if (saved) return saved;
   } catch {}
   if (isLocalHost()) return "ws://" + (location.hostname || "localhost") + ":8080";
-  return null;
+  return DEFAULT_REMOTE_SERVER;
 }
 
 export function setServerUrl(url) {
