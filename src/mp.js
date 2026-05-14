@@ -1,11 +1,11 @@
 // WebSocket multiplayer client. Talks to server/index.js (authoritative sim).
 // Same external API as the old P2P Mp class so main.js doesn't have to change.
 
-const DEFAULT_SERVER = location.protocol === "https:"
-  ? "wss://" + location.host + "/ws"
-  : "ws://" + (location.hostname || "localhost") + ":8080";
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", ""]);
 
-function serverUrl() {
+function isLocalHost() { return LOCAL_HOSTS.has(location.hostname); }
+
+export function getSavedServerUrl() {
   const q = new URLSearchParams(location.search).get("server");
   if (q) {
     try { localStorage.setItem("deadmag.server", q); } catch {}
@@ -15,7 +15,22 @@ function serverUrl() {
     const saved = localStorage.getItem("deadmag.server");
     if (saved) return saved;
   } catch {}
-  return DEFAULT_SERVER;
+  if (isLocalHost()) return "ws://" + (location.hostname || "localhost") + ":8080";
+  return null;
+}
+
+export function setServerUrl(url) {
+  if (!url) {
+    try { localStorage.removeItem("deadmag.server"); } catch {}
+    return;
+  }
+  // normalize: accept https:// → wss://, http:// → ws://, strip trailing slash
+  let u = url.trim().replace(/\/+$/, "");
+  if (/^https:\/\//i.test(u)) u = "wss://" + u.slice(8);
+  else if (/^http:\/\//i.test(u)) u = "ws://" + u.slice(7);
+  else if (!/^wss?:\/\//i.test(u)) u = (location.protocol === "https:" ? "wss://" : "ws://") + u;
+  try { localStorage.setItem("deadmag.server", u); } catch {}
+  return u;
 }
 
 const DEBUG = true;
@@ -51,8 +66,12 @@ export class Mp {
 
   async _connect() {
     if (this.ws) return;
-    const url = serverUrl();
+    const url = getSavedServerUrl();
+    if (!url) {
+      throw new Error("No DeadMag server configured. Click SERVER on the menu and paste your server URL (e.g. wss://your-server.onrender.com).");
+    }
     log("connecting to", url);
+    this._emit("connecting", url);
     return new Promise((resolve, reject) => {
       let ws;
       try { ws = new WebSocket(url); } catch (e) { reject(e); return; }
@@ -60,8 +79,8 @@ export class Mp {
       const tm = setTimeout(() => {
         if (this._opened) return;
         try { ws.close(); } catch {}
-        reject(new Error("Couldn't reach DeadMag server at " + url));
-      }, 8000);
+        reject(new Error("Couldn't reach DeadMag server at " + url + " (free hosts can cold-start; try again)"));
+      }, 60000);
       ws.onopen = () => {
         clearTimeout(tm);
         this._opened = true;

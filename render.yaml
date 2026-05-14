@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: deadmag-server
+    runtime: node
+    plan: free
+    region: oregon
+    autoDeploy: true
+    branch: main
+    buildCommand: npm install --omit=dev
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+    healthCheckPath: /

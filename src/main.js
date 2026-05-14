@@ -3,7 +3,7 @@ import { Camera } from "./camera.js";
 import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
-import { Mp } from "./mp.js";
+import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { mountVersion } from "./version-display.js";
 
@@ -72,7 +72,28 @@ function onMenuAction(action) {
   else if (action === "solo-arsenal") startSolo("arsenal");
   else if (action === "mp-create") createLobby();
   else if (action === "mp-join") openJoin();
+  else if (action === "set-server") promptServerUrl();
 }
+
+function refreshServerLabel() {
+  const el = document.getElementById("set-server-current");
+  if (!el) return;
+  const u = getSavedServerUrl();
+  el.textContent = u || "not set";
+}
+
+function promptServerUrl() {
+  const current = getSavedServerUrl() || "";
+  const next = window.prompt(
+    "Paste your DeadMag server URL (e.g. wss://deadmag-server.onrender.com).\nLeave blank to clear.",
+    current
+  );
+  if (next === null) return;
+  setServerUrl(next.trim() || null);
+  refreshServerLabel();
+}
+
+refreshServerLabel();
 
 function startSolo(m) {
   mode = m;
@@ -93,7 +114,9 @@ async function createLobby() {
   try {
     mp = new Mp();
     setupMpHandlers();
+    startConnectTimer();
     const code = await mp.create(myName);
+    stopConnectTimer();
     roomCode = code;
     isHost = true;
     localId = mp.localPlayerId;
@@ -102,10 +125,22 @@ async function createLobby() {
     renderLobby();
     ui.setNetStatus("ONLINE");
   } catch (e) {
+    stopConnectTimer();
     alert("Couldn't open room: " + (e?.message ?? e));
     leaveToMenu();
   }
 }
+
+let _connectTimer = null;
+function startConnectTimer() {
+  const start = performance.now();
+  stopConnectTimer();
+  _connectTimer = setInterval(() => {
+    const s = Math.floor((performance.now() - start) / 1000);
+    ui.setNetStatus(`CONNECTING TO SERVER… ${s}s ${s > 8 ? "(free hosts cold-start)" : ""}`);
+  }, 250);
+}
+function stopConnectTimer() { if (_connectTimer) { clearInterval(_connectTimer); _connectTimer = null; } }
 
 function openJoin() {
   ui.showOnly("join");
@@ -121,20 +156,10 @@ async function joinSubmit(code) {
   try {
     mp = new Mp();
     setupMpHandlers();
+    startConnectTimer();
     await mp.join(code, myName);
+    stopConnectTimer();
     roomCode = code;
-    const totalMs = 25000;
-    const start = performance.now();
-    const tick = setInterval(() => {
-      const elapsed = performance.now() - start;
-      const s = Math.max(0, Math.ceil((totalMs - elapsed) / 1000));
-      ui.setNetStatus(`SEARCHING FOR HOST… ${s}s`);
-    }, 250);
-    try {
-      await mp.waitForPeer(totalMs);
-    } finally {
-      clearInterval(tick);
-    }
     isHost = false;
     localId = mp.localPlayerId;
     state = "lobby";
@@ -142,6 +167,7 @@ async function joinSubmit(code) {
     renderLobby();
     ui.setNetStatus("ONLINE");
   } catch (e) {
+    stopConnectTimer();
     const msg = (e?.message === "ROOM NOT FOUND")
       ? `No room with code ${code}. Check the code (host must have the lobby open).`
       : "Couldn't join: " + (e?.message ?? e);

@@ -1,3 +1,4 @@
+import http from "http";
 import { WebSocketServer } from "ws";
 import {
   createSim, addPlayer, removePlayer, setInput, step,
@@ -149,8 +150,17 @@ function serializeSim(sim) {
 let _id = 1000;
 function nextId() { return _id++; }
 
-const wss = new WebSocketServer({ port: PORT });
-console.log(`[DeadMag] ws listening on :${PORT}`);
+const httpServer = http.createServer((req, res) => {
+  if (req.url === "/health" || req.url === "/") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(`DeadMag server ok · rooms=${rooms.size}\n`);
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+const wss = new WebSocketServer({ server: httpServer });
+httpServer.listen(PORT, () => console.log(`[DeadMag] listening on :${PORT}`));
 
 wss.on("connection", (ws) => {
   let room = null;
