@@ -1,6 +1,6 @@
 # DeadMag
 
-**Play:** https://goldcookie98.github.io/DeadMag/
+**Play:** [https://goldcookie98.github.io/DeadMag/](http://deadmag.ddns.net/)
 
 2D online top-down shooter. HTML5 Canvas + Node.js WebSockets.
 
