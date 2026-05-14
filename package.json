@@ -6,9 +6,13 @@
   "scripts": {
     "dev": "npx --yes http-server -p 8000 -c-1 -s .",
     "server": "node server/index.js",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node test/mp.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
   }
 }

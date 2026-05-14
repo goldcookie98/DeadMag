@@ -1,197 +1,142 @@
-const APP_ID = "deadmag-v1";
-const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// WebSocket multiplayer client. Talks to server/index.js (authoritative sim).
+// Same external API as the old P2P Mp class so main.js doesn't have to change.
+
+const DEFAULT_SERVER = location.protocol === "https:"
+  ? "wss://" + location.host + "/ws"
+  : "ws://" + (location.hostname || "localhost") + ":8080";
+
+function serverUrl() {
+  const q = new URLSearchParams(location.search).get("server");
+  if (q) {
+    try { localStorage.setItem("deadmag.server", q); } catch {}
+    return q;
+  }
+  try {
+    const saved = localStorage.getItem("deadmag.server");
+    if (saved) return saved;
+  } catch {}
+  return DEFAULT_SERVER;
+}
+
 const DEBUG = true;
 const log = (...a) => { if (DEBUG) console.log("[mp]", ...a); };
 
-function randomId(len = 12) {
-  let s = "";
-  for (let i = 0; i < len; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
-  return s;
-}
-
-export function generateCode() {
-  let c = "";
-  for (let i = 0; i < 4; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
-  return c;
-}
-
-export const SELF_ID = `${APP_ID}-self-${randomId(10)}`;
-const roomIdFor = (code) => `${APP_ID}-room-${code}`;
-
-function getPeerCtor() {
-  const P = typeof window !== "undefined" ? window.Peer : null;
-  if (!P) throw new Error("PeerJS not loaded (window.Peer missing). Check the <script> tag in index.html.");
-  return P;
-}
+// Kept for back-compat with main.js imports. We don't actually use it as an ID anymore;
+// the server assigns the canonical playerId.
+export const SELF_ID = "self";
 
 export class Mp {
   constructor() {
-    this.peer = null;
+    this.ws = null;
     this.code = null;
     this.isHost = false;
     this.myName = "PLAYER";
-    this.peers = new Map();
     this.lobbyMode = "horde";
+    this.localPlayerId = null;
+    this.hostPlayerId = null;
+    this.serverPlayers = [];        // [{ id, name }]
     this.handlers = {};
+    this._opened = false;
+    this._welcomed = false;
+    this._welcomeWaiters = [];
     this._firstPeerResolvers = [];
-    this.hostConn = null;
-    this._destroyed = false;
   }
 
   on(ev, fn) { this.handlers[ev] = fn; }
 
-  async create(name) {
-    this.code = generateCode();
-    this.isHost = true;
-    this.myName = name;
-    await this._initPeer(roomIdFor(this.code));
-    this.peer.on("connection", (conn) => this._setupHostConn(conn));
-    log("hosting room", this.code);
-    return this.code;
+  _emit(ev, ...args) {
+    const fn = this.handlers[ev];
+    if (fn) try { fn(...args); } catch (e) { console.error("[mp] handler error", ev, e); }
   }
 
-  async join(code, name) {
-    this.code = (code || "").toUpperCase();
-    this.isHost = false;
-    this.myName = name;
-    await this._initPeer(SELF_ID);
-    const hostId = roomIdFor(this.code);
-    log("connecting to host", hostId);
+  async _connect() {
+    if (this.ws) return;
+    const url = serverUrl();
+    log("connecting to", url);
     return new Promise((resolve, reject) => {
-      const conn = this.peer.connect(hostId, { reliable: true });
-      if (!conn) { reject(new Error("ROOM NOT FOUND")); return; }
-      this.hostConn = conn;
-      let resolved = false;
-      const fail = (why) => {
-        if (resolved) return;
-        resolved = true;
-        log("join failed:", why);
-        try { conn.close(); } catch {}
-        reject(new Error("ROOM NOT FOUND"));
-      };
-      const win = () => {
-        if (resolved) return;
-        resolved = true;
-        log("guest→host conn open");
-        this._setupGuestConn(conn);
+      let ws;
+      try { ws = new WebSocket(url); } catch (e) { reject(e); return; }
+      this.ws = ws;
+      const tm = setTimeout(() => {
+        if (this._opened) return;
+        try { ws.close(); } catch {}
+        reject(new Error("Couldn't reach DeadMag server at " + url));
+      }, 8000);
+      ws.onopen = () => {
+        clearTimeout(tm);
+        this._opened = true;
+        log("ws open");
         resolve();
       };
-      conn.on("open", win);
-      conn.on("error", (e) => fail(e?.type || e?.message || "conn-error"));
-      this.peer.on("error", (err) => {
-        if (err?.type === "peer-unavailable") fail("peer-unavailable");
-      });
-      setTimeout(() => fail("timeout"), 20000);
-    });
-  }
-
-  _initPeer(id) {
-    return new Promise((resolve, reject) => {
-      let Peer;
-      try { Peer = getPeerCtor(); } catch (e) { reject(e); return; }
-      try {
-        this.peer = new Peer(id, { debug: 1 });
-      } catch (e) {
-        reject(e);
-        return;
-      }
-      let settled = false;
-      this.peer.on("open", (pid) => {
-        if (settled) return;
-        settled = true;
-        log("peer open", pid);
-        resolve();
-      });
-      this.peer.on("error", (err) => {
-        log("peer error", err?.type, err?.message);
-        if (settled) return;
-        if (err?.type === "unavailable-id") {
-          settled = true;
-          reject(new Error("ROOM CODE TAKEN — try another"));
-        } else if (err?.type === "network" || err?.type === "server-error" || err?.type === "socket-error" || err?.type === "browser-incompatible") {
-          settled = true;
-          reject(new Error("Peer broker unreachable: " + err.type));
+      ws.onerror = (e) => {
+        log("ws error", e?.message || "");
+        if (!this._opened) {
+          clearTimeout(tm);
+          reject(new Error("Couldn't reach DeadMag server at " + url));
         }
-      });
-      setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error("Peer broker timeout"));
-      }, 15000);
+      };
+      ws.onclose = () => {
+        log("ws close");
+        this._opened = false;
+        this._emit("peerLeft", "host");
+      };
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        this._onMessage(m);
+      };
     });
   }
 
-  _setupHostConn(conn) {
-    log("guest connecting", conn.peer.slice(-6));
-    conn.on("open", () => {
-      log("host conn open with", conn.peer.slice(-6));
-      if (!this.peers.has(conn.peer)) {
-        this.peers.set(conn.peer, { name: "P_" + conn.peer.slice(-4), conn });
-        this.handlers.peers?.();
+  _send(type, extra = {}) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    this.ws.send(JSON.stringify({ type, ...extra }));
+  }
+
+  _onMessage(m) {
+    if (m.type === "welcome") {
+      this._welcomed = true;
+      this.code = m.code;
+      this.localPlayerId = m.playerId;
+      this.hostPlayerId = m.hostId;
+      if (typeof window !== "undefined") window.__mpLocalId = m.playerId;
+      this.lobbyMode = m.mode || this.lobbyMode;
+      this.serverPlayers = m.players || [];
+      this.isHost = this.localPlayerId === this.hostPlayerId;
+      const ws = this._welcomeWaiters.splice(0);
+      for (const w of ws) w.resolve();
+      this._emit("peers");
+      if (this.serverPlayers.length > 1) this._resolveFirstPeer();
+    } else if (m.type === "lobby") {
+      this.lobbyMode = m.mode || this.lobbyMode;
+      this.hostPlayerId = m.hostId;
+      this.serverPlayers = m.players || [];
+      this.isHost = this.localPlayerId === this.hostPlayerId;
+      this._emit("peers");
+      this._emit("modeChanged");
+      if (this.serverPlayers.length > 1) this._resolveFirstPeer();
+    } else if (m.type === "error") {
+      log("server error:", m.message);
+      const ws = this._welcomeWaiters.splice(0);
+      for (const w of ws) w.reject(new Error(m.message || "ROOM NOT FOUND"));
+    } else if (m.type === "start") {
+      // server tells us the game is starting; player IDs are already established.
+      this._emit("start", { mode: m.mode, mapping: this._identityMapping() });
+    } else if (m.type === "state") {
+      if (typeof window !== "undefined") {
+        try { window.__lastState = structuredClone(m.state); } catch { window.__lastState = JSON.parse(JSON.stringify(m.state)); }
       }
-    });
-    conn.on("data", (msg) => this._onMessage(msg, conn));
-    conn.on("close", () => {
-      log("host conn closed:", conn.peer.slice(-6));
-      this.peers.delete(conn.peer);
-      this.handlers.peerLeft?.(conn.peer);
-      this.handlers.peers?.();
-      this._broadcast("lobby", { players: this.roster(), mode: this.lobbyMode });
-    });
-    conn.on("error", (e) => log("host conn error:", e?.message || e));
-  }
-
-  _setupGuestConn(conn) {
-    conn.on("data", (msg) => this._onMessage(msg, conn));
-    conn.on("close", () => {
-      log("guest→host conn closed");
-      this.handlers.peerLeft?.("host");
-    });
-    conn.on("error", (e) => log("guest conn error:", e?.message || e));
-    const hi = () => this._send(conn, "hello", { name: this.myName });
-    hi();
-    setTimeout(hi, 300);
-    setTimeout(hi, 1200);
-  }
-
-  _onMessage(msg, conn) {
-    if (!msg || typeof msg !== "object") return;
-    const { type, data } = msg;
-    if (type === "hello") {
-      this.peers.set(conn.peer, { name: data?.name || ("P_" + conn.peer.slice(-4)), conn });
-      this.handlers.peers?.();
-      this._resolveFirstPeer();
-      if (this.isHost) this._broadcast("lobby", { players: this.roster(), mode: this.lobbyMode });
-    } else if (type === "lobby") {
-      if (!this.isHost && data) {
-        this._remoteRoster = data.players || [];
-        this.lobbyMode = data.mode || this.lobbyMode;
-        this.handlers.peers?.();
-        this._resolveFirstPeer();
-      }
-    } else if (type === "mode") {
-      if (!this.isHost) { this.lobbyMode = data.mode; this.handlers.modeChanged?.(); }
-    } else if (type === "start") {
-      if (!this.isHost) this.handlers.start?.(data);
-    } else if (type === "input") {
-      if (this.isHost) this.handlers.peerInput?.(conn.peer, data);
-    } else if (type === "state") {
-      if (!this.isHost) this.handlers.state?.(data);
-    } else if (type === "buy") {
-      if (this.isHost) this.handlers.peerBuy?.(conn.peer, data);
-    } else if (type === "equip") {
-      if (this.isHost) this.handlers.peerEquip?.(conn.peer, data);
-    } else if (type === "ready") {
-      if (this.isHost) this.handlers.peerReady?.(conn.peer, !!data?.ready);
+      this._emit("state", m.state);
     }
   }
 
-  _send(conn, type, data) {
-    try { if (conn?.open) conn.send({ type, data }); } catch (e) { log("send fail", type, e?.message); }
-  }
-
-  _broadcast(type, data) {
-    for (const [, p] of this.peers) this._send(p.conn, type, data);
+  _identityMapping() {
+    // main.js expects `mapping[SELF_ID] -> localId`. With the server model,
+    // both sides know their own localPlayerId directly. Build a mapping
+    // that lets main.js's existing code still resolve our local id.
+    const map = {};
+    map[SELF_ID] = this.localPlayerId;
+    for (const p of this.serverPlayers) map[String(p.id)] = p.id;
+    return map;
   }
 
   _resolveFirstPeer() {
@@ -199,8 +144,41 @@ export class Mp {
     for (const r of rs) r();
   }
 
+  async create(name) {
+    this.myName = name;
+    await this._connect();
+    return new Promise((resolve, reject) => {
+      this._welcomeWaiters.push({
+        resolve: () => resolve(this.code),
+        reject,
+      });
+      this._send("create", { name });
+      setTimeout(() => {
+        if (this._welcomed) return;
+        reject(new Error("Server didn't reply"));
+      }, 6000);
+    });
+  }
+
+  async join(code, name) {
+    this.myName = name;
+    this.code = (code || "").toUpperCase();
+    await this._connect();
+    return new Promise((resolve, reject) => {
+      this._welcomeWaiters.push({
+        resolve: () => resolve(),
+        reject: (e) => reject(new Error(e.message === "Room not found" ? "ROOM NOT FOUND" : e.message)),
+      });
+      this._send("join", { code: this.code, name });
+      setTimeout(() => {
+        if (this._welcomed) return;
+        reject(new Error("ROOM NOT FOUND"));
+      }, 8000);
+    });
+  }
+
   waitForPeer(timeoutMs) {
-    if (this.peers.size > 0 || this._remoteRoster) return Promise.resolve();
+    if (this.serverPlayers.length > 1) return Promise.resolve();
     return new Promise((resolve, reject) => {
       let done = false;
       const ok = () => { if (done) return; done = true; resolve(); };
@@ -208,47 +186,59 @@ export class Mp {
       setTimeout(() => {
         if (done) return;
         done = true;
-        const idx = this._firstPeerResolvers.indexOf(ok);
-        if (idx >= 0) this._firstPeerResolvers.splice(idx, 1);
-        reject(new Error("ROOM NOT FOUND"));
+        const i = this._firstPeerResolvers.indexOf(ok);
+        if (i >= 0) this._firstPeerResolvers.splice(i, 1);
+        // For host, no peers may join — that's not an error. Resolve so lobby stays open.
+        if (this.isHost) resolve();
+        else reject(new Error("ROOM NOT FOUND"));
       }, timeoutMs);
     });
   }
 
   roster() {
-    if (this.isHost) {
-      return [
-        { id: SELF_ID, name: this.myName, host: true },
-        ...[...this.peers].map(([id, p]) => ({ id, name: p.name, host: false })),
-      ];
+    return this.serverPlayers.map((p) => ({
+      id: p.id,
+      name: p.name,
+      host: p.id === this.hostPlayerId,
+    }));
+  }
+
+  // Used by main.js iteration over mp.peers — return a Map-like that
+  // contains everyone other than self, keyed by playerId.
+  get peers() {
+    const m = new Map();
+    for (const p of this.serverPlayers) {
+      if (p.id === this.localPlayerId) continue;
+      m.set(String(p.id), { name: p.name });
     }
-    return this._remoteRoster || [{ id: SELF_ID, name: this.myName, host: false }];
+    return m;
   }
 
   setMode(mode) {
     this.lobbyMode = mode;
-    if (this.isHost) {
-      this._broadcast("mode", { mode });
-      this._broadcast("lobby", { players: this.roster(), mode });
-    }
+    if (this.isHost) this._send("mode", { mode });
   }
 
-  startGame(mode, mapping) {
+  startGame(mode /*, mapping */) {
     if (!this.isHost) return;
-    this._broadcast("start", { mode, mapping });
+    this._send("start", { mode: mode || this.lobbyMode });
   }
 
-  sendInput(input)        { if (!this.isHost) this._send(this.hostConn, "input", input); }
-  broadcastState(state)   { if (this.isHost) this._broadcast("state", state); }
-  sendBuy(itemId)         { if (!this.isHost) this._send(this.hostConn, "buy", { itemId }); }
-  sendEquip(weapon)       { if (!this.isHost) this._send(this.hostConn, "equip", { weapon }); }
-  sendReady(ready)        { if (!this.isHost) this._send(this.hostConn, "ready", { ready: !!ready }); }
+  sendInput(input)  { this._send("input", { input }); }
+  sendBuy(itemId)   { this._send("buy", { itemId }); }
+  sendEquip(weapon) { this._send("equip", { weapon }); }
+  sendReady(ready)  { this._send("ready", { ready: !!ready }); }
+
+  // Old API stubs — server is authoritative, so these are no-ops on the host side.
+  broadcastState(_state) { /* no-op: server broadcasts */ }
 
   leave() {
-    this._destroyed = true;
-    try { this.peer?.destroy(); } catch {}
-    this.peer = null;
-    this.peers.clear();
-    this.hostConn = null;
+    try { this.ws?.close(); } catch {}
+    this.ws = null;
+    this._welcomed = false;
+    this._opened = false;
+    this.serverPlayers = [];
+    this.localPlayerId = null;
+    this.hostPlayerId = null;
   }
 }

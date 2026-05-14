@@ -1,9 +1,9 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, setReady, CONSTANTS } from "./sim.js";
+import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
-import { Mp, SELF_ID } from "./mp.js";
+import { Mp } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { mountVersion } from "./version-display.js";
 
@@ -23,8 +23,6 @@ let mp = null;
 let roomCode = null;
 let isHost = false;
 let lobby = { players: [], mode: "horde" };
-let peerIdToPlayerId = new Map();
-const COLOR_FOR = (i) => COLORS[i % COLORS.length];
 let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 
 function resize() {
@@ -57,18 +55,15 @@ ui.on("shopReady", () => {
   const me = sim.players.get(localId);
   if (!me || me.state !== "alive") return;
   const next = !me.ready;
-  if (mp?.isHost) setReady(sim, localId, next);
-  else if (mp) mp.sendReady(next);
+  if (mp) mp.sendReady(next);
   else setReady(sim, localId, next);
 });
 ui.on("buy", (id) => {
-  if (mp?.isHost) shopBuy(sim, localId, id);
-  else if (mp) mp.sendBuy(id);
+  if (mp) mp.sendBuy(id);
   else if (sim) shopBuy(sim, localId, id);
 });
 ui.on("equip", (wid) => {
-  if (mp?.isHost) switchWeapon(sim, localId, wid);
-  else if (mp) mp.sendEquip(wid);
+  if (mp) mp.sendEquip(wid);
   else if (sim) switchWeapon(sim, localId, wid);
 });
 
@@ -101,10 +96,11 @@ async function createLobby() {
     const code = await mp.create(myName);
     roomCode = code;
     isHost = true;
+    localId = mp.localPlayerId;
     state = "lobby";
-    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: SELF_ID };
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.hostPlayerId };
     renderLobby();
-    ui.setNetStatus("ONLINE · P2P");
+    ui.setNetStatus("ONLINE");
   } catch (e) {
     alert("Couldn't open room: " + (e?.message ?? e));
     leaveToMenu();
@@ -140,13 +136,14 @@ async function joinSubmit(code) {
       clearInterval(tick);
     }
     isHost = false;
+    localId = mp.localPlayerId;
     state = "lobby";
-    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: null };
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.hostPlayerId };
     renderLobby();
-    ui.setNetStatus("ONLINE · P2P");
+    ui.setNetStatus("ONLINE");
   } catch (e) {
     const msg = (e?.message === "ROOM NOT FOUND")
-      ? `No host found for room ${code} after 25s. Double-check the code (host must have the lobby open) or try again — the public relays can be slow on first connect.`
+      ? `No room with code ${code}. Check the code (host must have the lobby open).`
       : "Couldn't join: " + (e?.message ?? e);
     alert(msg);
     leaveToMenu();
@@ -155,7 +152,9 @@ async function joinSubmit(code) {
 
 function setupMpHandlers() {
   mp.on("peers", () => {
-    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.roster().find((p) => p.host)?.id };
+    isHost = mp.isHost;
+    localId = mp.localPlayerId;
+    lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.hostPlayerId };
     renderLobby();
   });
   mp.on("modeChanged", () => {
@@ -164,8 +163,7 @@ function setupMpHandlers() {
   });
   mp.on("start", (data) => {
     mode = data.mode;
-    peerIdToPlayerId = new Map(Object.entries(data.mapping));
-    localId = peerIdToPlayerId.get(SELF_ID);
+    localId = mp.localPlayerId;
     state = "playing";
     sim = createSim(mode);
     ui.showOnly();
@@ -174,50 +172,14 @@ function setupMpHandlers() {
     sim = inflateState(data);
     if (sim.events?.length) processEvents(sim);
   });
-  mp.on("peerInput", (peerId, data) => {
-    if (!sim) return;
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null) setInput(sim, pid, data);
-  });
-  mp.on("peerBuy", (peerId, data) => {
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null && sim) shopBuy(sim, pid, data.itemId);
-  });
-  mp.on("peerEquip", (peerId, data) => {
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null && sim) switchWeapon(sim, pid, data.weapon);
-  });
-  mp.on("peerReady", (peerId, ready) => {
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null && sim) setReady(sim, pid, ready);
-  });
-  mp.on("peerLeft", (peerId) => {
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null && sim) removePlayer(sim, pid);
-    peerIdToPlayerId.delete(peerId);
+  mp.on("peerLeft", () => {
+    ui.setNetStatus("DISCONNECTED");
   });
 }
 
 function hostStartGame() {
   if (!mp?.isHost) return;
-  const m = lobby.mode || "horde";
-  mode = m;
-  sim = createSim(m);
-  peerIdToPlayerId = new Map();
-  const mapping = {};
-  const meP = addPlayer(sim, myName, COLOR_FOR(0), false);
-  mapping[SELF_ID] = meP.id;
-  peerIdToPlayerId.set(SELF_ID, meP.id);
-  let idx = 1;
-  for (const [peerId, peer] of mp.peers) {
-    const p = addPlayer(sim, peer.name, COLOR_FOR(idx++), false);
-    mapping[peerId] = p.id;
-    peerIdToPlayerId.set(peerId, p.id);
-  }
-  localId = meP.id;
-  state = "playing";
-  ui.showOnly();
-  mp.startGame(m, mapping);
+  mp.startGame(lobby.mode || "horde");
 }
 
 function inflateState(s) {
@@ -226,50 +188,19 @@ function inflateState(s) {
   return s;
 }
 
-function serializeSimForNet(sim) {
-  return {
-    mode: sim.mode,
-    tick: sim.tick,
-    timeMs: sim.timeMs,
-    wave: sim.wave,
-    waveActive: sim.waveActive,
-    shopOpen: sim.shopOpen,
-    shopOpenUntil: sim.shopOpenUntil,
-    gameOver: sim.gameOver,
-    winnerId: sim.winnerId,
-    events: sim.events,
-    players: [...sim.players.values()].map((p) => ({
-      id: p.id, name: p.name, color: p.color,
-      x: p.x, y: p.y, angle: p.angle,
-      hp: p.hp, maxHp: p.maxHp, armor: p.armor,
-      weapon: p.weapon, inventory: p.inventory, ammo: p.ammo,
-      reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
-      cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
-      state: p.state, downedAt: p.downedAt, bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
-      upgrades: p.upgrades,
-      arsenalKills: [...p.arsenalKills],
-      score: p.score,
-    })),
-    zombies: sim.zombies.map((z) => ({ id: z.id, x: z.x, y: z.y, hp: z.hp, maxHp: z.maxHp })),
-    bullets: sim.bullets.map((b) => ({ id: b.id, x: b.x, y: b.y, vx: b.vx, vy: b.vy, weapon: b.weapon })),
-    explosions: sim.explosions.map((e) => ({ x: e.x, y: e.y, r: e.r, t: e.t })),
-  };
-}
-
 function renderLobby() {
   ui.setLobby({
     code: roomCode || "----",
     title: isHost ? "LOBBY · HOST" : "LOBBY",
-    players: lobby.players.map((p) => ({ name: p.name, host: p.host || p.id === lobby.hostId })),
+    players: (lobby.players || []).map((p) => ({ name: p.name, host: p.host || p.id === lobby.hostId })),
     mode: lobby.mode,
-    canStart: isHost && lobby.players.length >= 1,
+    canStart: isHost && (lobby.players?.length ?? 0) >= 1,
   });
 }
 
 function leaveToMenu() {
   if (mp) mp.leave();
   mp = null; sim = null; roomCode = null;
-  peerIdToPlayerId = new Map();
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
@@ -286,11 +217,6 @@ function frame(now) {
       if (sim.players.get(localId)) setInput(sim, localId, snap);
       step(sim, dt);
       processEvents(sim);
-    } else if (mp.isHost) {
-      if (sim.players.get(localId)) setInput(sim, localId, snap);
-      step(sim, dt);
-      processEvents(sim);
-      mp.broadcastState(serializeSimForNet(sim));
     } else {
       mp.sendInput(snap);
     }

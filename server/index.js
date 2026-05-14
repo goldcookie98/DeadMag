@@ -1,7 +1,7 @@
 import { WebSocketServer } from "ws";
 import {
   createSim, addPlayer, removePlayer, setInput, step,
-  shopBuy, switchWeapon,
+  shopBuy, switchWeapon, setReady,
 } from "../src/sim.js";
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -47,9 +47,23 @@ function addClient(room, ws, name) {
   if (room.hostId == null) room.hostId = playerId;
   if (room.started && room.sim) {
     const p = addPlayer(room.sim, client.name, client.color, false);
-    client.playerId = p.id;
+    rebindSimPlayerId(room.sim, p.id, client.id);
+    client.playerId = client.id;
   }
   return client;
+}
+
+// Force the sim player's id to match the lobby client id so the wire protocol
+// uses a single id-space (lobby == sim).
+function rebindSimPlayerId(sim, oldId, newId) {
+  if (oldId === newId) return;
+  const p = sim.players.get(oldId);
+  if (!p) return;
+  sim.players.delete(oldId);
+  p.id = newId;
+  sim.players.set(newId, p);
+  const inp = sim.inputs?.get(oldId);
+  if (inp) { sim.inputs.delete(oldId); sim.inputs.set(newId, inp); }
 }
 
 function removeClient(room, ws) {
@@ -92,7 +106,8 @@ function startGame(room, mode) {
   room.sim = createSim(mode);
   for (const c of room.players) {
     const p = addPlayer(room.sim, c.name, c.color, false);
-    c.playerId = p.id;
+    rebindSimPlayerId(room.sim, p.id, c.id);
+    c.playerId = c.id;
   }
   broadcast(room, { type: "start", mode });
   room.interval = setInterval(() => {
@@ -159,14 +174,19 @@ wss.on("connection", (ws) => {
       broadcast(room, lobbyPayload(room));
     } else if (m.type === "start" && room && client && client.id === room.hostId && !room.started) {
       startGame(room, m.mode || room.mode);
+    } else if (m.type === "mode" && room && client && client.id === room.hostId && !room.started) {
+      if (m.mode === "horde" || m.mode === "arsenal") {
+        room.mode = m.mode;
+        broadcast(room, lobbyPayload(room));
+      }
     } else if (m.type === "input" && room && client && room.started) {
       if (client.playerId) setInput(room.sim, client.playerId, m.input);
     } else if (m.type === "buy" && room && client && room.started) {
       shopBuy(room.sim, client.playerId, m.itemId);
     } else if (m.type === "equip" && room && client && room.started) {
       switchWeapon(room.sim, client.playerId, m.weapon);
-    } else if (m.type === "shop-ready") {
-      // optional fast-forward signal; ignore for now
+    } else if (m.type === "ready" && room && client && room.started) {
+      setReady(room.sim, client.playerId, !!m.ready);
     }
     if (room) room.lastActiveAt = Date.now();
   });
