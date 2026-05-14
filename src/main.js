@@ -19,17 +19,20 @@ const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e"
 const INPUT_SEND_INTERVAL_MS = 33;
 const PREDICT_BASE_SPEED = 220;
 const PREDICT_PLAYER_R = 14;
-// Per-frame pull rates (compound across ~2 frames per server snapshot at 60fps).
-// Idle: pull toward server briskly so any drift settles when player stops.
-// Driving: don't pull at all — the server's "current" position is intrinsically
-// RTT-behind our predict, and reconciling against it while moving creates
-// visible jitter when changing direction. Drift only matters when stopped.
-const PREDICT_IDLE_PULL    = 0.18;
-const PREDICT_DRIVE_PULL   = 0.0;
-const PREDICT_DEADZONE_PX  = 6;          // below this, snap exactly to predict
-const PREDICT_BIG_DRIFT_PX = 90;         // above this, pull strongly even mid-move
-const PREDICT_BIG_PULL     = 0.12;
-const PREDICT_HARD_SNAP_PX = 280;        // explosion knockback / desync floor
+// Reconciliation uses a fixed correction *speed* (px/frame) rather than a
+// rate proportional to drift. Rate-based pull yanks proportionally to drift:
+// release the keys after holding a direction for a second and you get a
+// 7px jump on the next frame — which feels jerky even though it's "smooth"
+// math. Velocity-clamped correction trickles at a constant speed regardless
+// of how far we are, so the user just sees the camera glide back into sync.
+// On the driven axis the speed is 0 (don't fight the player). On idle axes
+// it converges in ~250ms. On large drift (knockback) it converges fast.
+const PREDICT_RECONCILE_DRIVE_PX = 0.0;
+const PREDICT_RECONCILE_IDLE_PX  = 1.4;
+const PREDICT_RECONCILE_BIG_PX   = 4.0;
+const PREDICT_BIG_DRIFT_PX       = 160;
+const PREDICT_DEADZONE_PX        = 3;
+const PREDICT_HARD_SNAP_PX       = 320;
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -378,12 +381,11 @@ function advancePredict(dt, snap, me) {
   predictMe.angle = Math.atan2(snap.aimY - predictMe.y, snap.aimX - predictMe.x);
 }
 
-// Per-frame reconciliation that doesn't fight the player's input. While an axis
-// is being driven, the server's authoritative position is intrinsically lagged
-// by ~RTT/2; pulling toward it would yank the predicted character backward on
-// direction changes (the "jitter" symptom). So we hold steady while moving and
-// only converge when stopped, with a strong override for very large drift
-// (knockback, explosion, teleport, etc).
+// Per-frame reconciliation that doesn't fight the player's input. While an
+// axis is being driven, we don't pull at all (the server is intrinsically
+// RTT/2 behind us; pulling backwards = visible yank). Off-axis or idle, we
+// converge at a fixed px/frame so the correction is invisible regardless of
+// how much drift accumulated. Big-drift override kicks in for knockback.
 function reconcilePerFrame(snap, serverMe) {
   if (!serverMe) return;
   if (serverMe.state !== "alive") {
@@ -406,10 +408,10 @@ function reconcilePerFrame(snap, serverMe) {
   const drivingX = (snap?.mx ?? 0) !== 0;
   const drivingY = (snap?.my ?? 0) !== 0;
   const big = d2 > PREDICT_BIG_DRIFT_PX * PREDICT_BIG_DRIFT_PX;
-  const rateX = big ? PREDICT_BIG_PULL : (drivingX ? PREDICT_DRIVE_PULL : PREDICT_IDLE_PULL);
-  const rateY = big ? PREDICT_BIG_PULL : (drivingY ? PREDICT_DRIVE_PULL : PREDICT_IDLE_PULL);
-  predictMe.x += dx * rateX;
-  predictMe.y += dy * rateY;
+  const stepX = big ? PREDICT_RECONCILE_BIG_PX : (drivingX ? PREDICT_RECONCILE_DRIVE_PX : PREDICT_RECONCILE_IDLE_PX);
+  const stepY = big ? PREDICT_RECONCILE_BIG_PX : (drivingY ? PREDICT_RECONCILE_DRIVE_PX : PREDICT_RECONCILE_IDLE_PX);
+  if (stepX > 0 && dx !== 0) predictMe.x += Math.sign(dx) * Math.min(Math.abs(dx), stepX);
+  if (stepY > 0 && dy !== 0) predictMe.y += Math.sign(dy) * Math.min(Math.abs(dy), stepY);
 }
 
 let last = performance.now();
