@@ -522,10 +522,14 @@ function updateHorde(sim) {
   if (sim.mode !== "horde") return;
   if (sim.gameOver) return;
 
-  const allDead = [...sim.players.values()].every((p) => p.lives <= 0);
-  if (allDead && sim.players.size > 0) {
-    sim.gameOver = true;
-    return;
+  if (sim.players.size > 0) {
+    const players = [...sim.players.values()];
+    const anyAlive = players.some((p) => p.state === "alive");
+    const allDead = players.every((p) => p.state === "dead");
+    if (allDead || (!anyAlive && players.every((p) => p.lives <= 0))) {
+      sim.gameOver = true;
+      return;
+    }
   }
 
   if (sim.waveActive && sim.zombiesToSpawn === 0 && sim.zombies.length === 0) {
@@ -630,14 +634,19 @@ function updateBots(sim, dt) {
     bot.lastX = p.x; bot.lastY = p.y;
 
     const reloading = sim.timeMs < p.reloadingUntil;
-    const wantReload = w.kind !== "melee" && !reloading && p.ammo / w.mag <= 0.25 && p.ammo < w.mag;
     const shootClear = target ? !lineHitsWall(p.x, p.y, target.x, target.y) : false;
+    const inFiringWindow = !!target && best < 500 && shootClear;
+    const wantReload =
+      w.kind !== "melee" &&
+      !reloading &&
+      p.ammo < w.mag &&
+      (p.ammo === 0 || !inFiringWindow || p.ammo / w.mag <= 0.34);
 
     const input = {
       mx, my,
       aimX: target ? target.x : p.x + 10,
       aimY: target ? target.y : p.y,
-      shoot: !!target && best < 500 && shootClear && !reloading && (w.kind === "melee" || p.ammo > 0),
+      shoot: inFiringWindow && !reloading && (w.kind === "melee" || p.ammo > 0),
       reload: wantReload,
     };
     sim.inputs.set(p.id, input);
