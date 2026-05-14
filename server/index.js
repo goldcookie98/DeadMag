@@ -9,7 +9,7 @@ const PORT = Number(process.env.PORT) || 8080;
 const TICK_HZ = 30;
 const TICK_MS = 1000 / TICK_HZ;
 const ROOM_TTL_MS = 1000 * 60 * 30;
-const COLORS = ["#ff2e6c", "#00ffd1", "#ffd400", "#8a5cff", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
+const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const rooms = new Map();
@@ -84,6 +84,7 @@ function destroyRoom(room) {
 function lobbyPayload(room) {
   return {
     type: "lobby",
+    code: room.code,
     mode: room.mode,
     hostId: room.hostId,
     players: room.players.map((p) => ({ id: p.id, name: p.name })),
@@ -172,6 +173,13 @@ wss.on("connection", (ws) => {
   ws.on("message", (raw) => {
     let m;
     try { m = JSON.parse(raw.toString()); } catch { return; }
+
+    if (m.type === "ping") {
+      try { ws.send(JSON.stringify({ type: "pong" })); } catch {}
+      // ping counts as activity so the room TTL sweeper keeps it alive
+      if (room) room.lastActiveAt = Date.now();
+      return;
+    }
 
     if (m.type === "create") {
       room = createRoom(m.name);

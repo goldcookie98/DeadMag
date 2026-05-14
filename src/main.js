@@ -192,6 +192,7 @@ function setupMpHandlers() {
   mp.on("peers", () => {
     isHost = mp.isHost;
     localId = mp.localPlayerId;
+    if (mp.code) roomCode = mp.code;
     lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: mp.hostPlayerId };
     renderLobby();
   });
@@ -217,8 +218,16 @@ function setupMpHandlers() {
     sim = inflated;
     if (sim.events?.length) processEvents(sim);
   });
-  mp.on("peerLeft", () => {
+  mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
+    const wasInGame = state === "playing" || state === "lobby";
+    if (!wasInGame) return;
+    alert("Disconnected from server" + (reason ? ` — ${reason}` : "") + ".");
+    leaveToMenu();
+  });
+  mp.on("serverError", (msg) => {
+    ui.setNetStatus("SERVER ERROR");
+    console.warn("[mp] server error:", msg);
   });
 }
 
