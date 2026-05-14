@@ -677,12 +677,16 @@ export function step(sim, dt) {
   sim.timeMs += dt * 1000;
   sim.tick += 1;
   sim.events = [];
+  // Refill ammo BEFORE reading shoot/reload inputs. Otherwise on the tick where
+  // a reload completes, tryShoot sees ammo=0 and re-triggers startReload, which
+  // pushes reloadingUntil into the future and finishReloads skips the refill —
+  // leaving the player stuck reloading forever under autofire.
+  finishReloads(sim);
   updateBots(sim, dt);
   updatePlayers(sim, dt);
   updateBullets(sim, dt);
   updateZombies(sim, dt);
   updateDowns(sim, dt);
-  finishReloads(sim);
   updateHorde(sim);
   updateRespawns(sim);
   pruneExplosions(sim);

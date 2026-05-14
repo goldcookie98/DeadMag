@@ -324,7 +324,7 @@ function frame(now) {
     render(ctx, renderSim, camera, localId, input.mouse);
 
     if (sim.shopOpen) {
-      if (ui.el.shop.classList.contains("hidden")) ui.showOnly("shop");
+      if (ui.el.shop.classList.contains("hidden")) { ui.resetShopCache(); ui.showOnly("shop"); }
       const me = sim.players.get(localId);
       if (me) ui.renderShop(me, sim.shopOpenUntil - sim.timeMs, sim);
     } else if (!ui.el.shop.classList.contains("hidden")) {

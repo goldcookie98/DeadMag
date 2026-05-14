@@ -184,11 +184,32 @@ export class UI {
       this.el.shopReady.classList.toggle("active", isReady);
     }
 
-    this.el.shopGrid.innerHTML = "";
-    for (const it of SHOP_ITEMS) {
+    // Only rebuild the grid when its content actually changes. Rebuilding every
+    // frame replaces the card under the cursor mid-click, so the click never
+    // lands on the same element for mousedown + mouseup.
+    const itemEntries = SHOP_ITEMS.map((it) => {
       const can = it.canBuy(player, sim);
       const cost = it.cost(player, sim);
       const afford = player.cash >= cost && can;
+      return { it, cost, afford };
+    });
+    const reviveAvail = !!sim && [...sim.players.values()].some((o) => o.id !== player.id && o.state === "dead" && o.lives > 0);
+    const sig = JSON.stringify({
+      cash: player.cash,
+      inv: ownedWeapons.sort(),
+      upg: player.upgrades,
+      armor: player.armor,
+      hp: player.hp,
+      maxHp: player.maxHp,
+      weapon: player.weapon,
+      revive: reviveAvail,
+      items: itemEntries.map((e) => [e.it.id, e.cost, e.afford]),
+    });
+    if (this._shopSig === sig) return;
+    this._shopSig = sig;
+
+    this.el.shopGrid.innerHTML = "";
+    for (const { it, cost, afford } of itemEntries) {
       const card = document.createElement("div");
       card.className = "shop-card" + (afford ? "" : " disabled");
       card.innerHTML = `<div class="name">${it.name}</div><div class="cost">$${cost}</div><div class="desc">${it.desc}</div>`;
@@ -212,6 +233,8 @@ export class UI {
       this.el.shopGrid.appendChild(card);
     }
   }
+
+  resetShopCache() { this._shopSig = null; }
 
   flashShopBuy(name, itemName) {
     let host = document.getElementById("shop-buy-feed");
