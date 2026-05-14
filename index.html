@@ -4,99 +4,299 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
     <title>DeadMag</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Anton&display=swap" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <canvas id="game"></canvas>
 
+    <!-- Full-screen scanline overlay, drawn above everything except the cheat panel -->
+    <div id="scanlines"></div>
+
     <div id="hud" class="hidden">
       <div id="hud-top">
-        <div id="hud-mode"></div>
-        <div id="hud-wave"></div>
-        <div id="hud-cash"></div>
+        <div id="hud-top-left">
+          <span id="hud-mode" class="chip chip-magenta">HORDE</span>
+          <span id="hud-wave" class="chip chip-yellow">WAVE 0</span>
+          <span id="hud-wave-sub" class="mono-dim"></span>
+        </div>
+        <div id="hud-top-right">
+          <span id="hud-ping" class="mono-acid">● —</span>
+          <span id="hud-alive" class="mono-dim">00:00 ALIVE</span>
+          <span id="hud-cash">$0</span>
+        </div>
       </div>
-      <div id="hud-bottom">
-        <div id="hud-bottom-left">
-          <div id="hud-hp-label">HP</div>
-          <div id="hud-hp-bar"><div id="hud-hp-fill"></div><div id="hud-hp-text"></div></div>
-          <div id="hud-armor-bar"><div id="hud-armor-fill"></div></div>
+
+      <div id="hud-killfeed"></div>
+
+      <div id="hud-squad"></div>
+
+      <div id="hud-vitals">
+        <div class="vitals-head">
+          <span class="vitals-tag">// VITALS</span>
+          <span id="hud-hp-warn"></span>
+        </div>
+        <div class="vitals-row">
+          <span id="hud-hp-big">100</span>
+          <div class="vitals-bar-wrap">
+            <div id="hud-hp-bar"><div id="hud-hp-fill"></div></div>
+            <div class="vitals-bar-foot"><span>HP</span><span id="hud-hp-text">100/100</span></div>
+          </div>
+        </div>
+        <div class="vitals-row" id="hud-armor-row">
+          <span id="hud-armor-big">0</span>
+          <div class="vitals-bar-wrap">
+            <div id="hud-armor-bar"><div id="hud-armor-fill"></div></div>
+            <div class="vitals-bar-foot"><span>ARMOR</span><span id="hud-armor-text">0/150</span></div>
+          </div>
+        </div>
+        <div class="vitals-lives-row">
+          <span class="vitals-lives-label">LIVES</span>
           <div id="hud-lives"></div>
         </div>
-        <div id="hud-ammo-wrap">
-          <div id="hud-weapon"></div>
-          <div id="hud-ammo"></div>
-          <div id="hud-reload"><div id="hud-reload-bar"></div></div>
-        </div>
-        <div id="hud-bottom-right"></div>
       </div>
-      <div id="hud-killfeed"></div>
+
+      <div id="hud-weapon-wrap">
+        <div id="hud-weapon-row">
+          <span id="hud-weapon" class="chip chip-cyan">PISTOL</span>
+          <span id="hud-auto" class="chip-outline-acid hidden">AUTO</span>
+        </div>
+        <div id="hud-ammo-row">
+          <span id="hud-ammo">12</span><span id="hud-mag">/12</span>
+        </div>
+        <div id="hud-reload" class="hidden"><div id="hud-reload-bar"></div></div>
+      </div>
+
+      <div id="hud-inventory">
+        <div class="inv-head"><span class="inv-tag">// INVENTORY</span><span class="inv-cycle">[E] CYCLE</span></div>
+        <div id="hud-inv-grid"></div>
+      </div>
     </div>
 
     <div id="menu" class="overlay">
-      <div class="title">
-        <h1>DEAD<span>MAG</span></h1>
-        <div class="subtitle">// neon-soaked top-down massacre //</div>
+      <div class="ribbon ribbon-magenta" id="menu-version-ribbon">SIGNAL ACQUIRED · <span id="version">v?</span></div>
+      <div class="ribbon ribbon-acid ribbon-right">// OFFLINE BUILD //</div>
+
+      <div class="menu-grid">
+        <div class="menu-left">
+          <div class="menu-tag">▌NEON-SOAKED TOP-DOWN MASSACRE▐</div>
+          <h1 class="menu-title"><span class="t-line-1">DEAD</span><span class="t-line-2">MAG.</span></h1>
+          <div class="menu-tags-row">
+            <span class="chip chip-yellow">HORDE</span>
+            <span class="chip chip-cyan">ARSENAL</span>
+            <span class="mono-dim">· 6 WEAPONS · 2–8 PLAYERS</span>
+          </div>
+
+          <div class="menu-buttons">
+            <button class="vbtn vbtn-primary vbtn-big" data-action="solo-horde">
+              <span class="vbtn-label">SOLO HORDE</span><span class="vbtn-sub">CO-OP ZOMBIES</span><span class="vbtn-arrow">▶</span>
+            </button>
+            <div class="menu-btn-row">
+              <button class="vbtn vbtn-cyan" data-action="solo-arsenal">
+                <span class="vbtn-label">ARSENAL</span><span class="vbtn-sub">FFA vs BOTS</span><span class="vbtn-arrow">▶</span>
+              </button>
+              <button class="vbtn vbtn-acid" data-action="mp-join">
+                <span class="vbtn-label">JOIN</span><span class="vbtn-sub">ENTER CODE</span><span class="vbtn-arrow">▶</span>
+              </button>
+            </div>
+            <button class="vbtn vbtn-yellow" data-action="mp-create">
+              <span class="vbtn-label">CREATE LOBBY</span><span class="vbtn-sub">HOST A ROOM</span><span class="vbtn-arrow">▶</span>
+            </button>
+            <button class="vbtn vbtn-thin" data-action="set-server" id="set-server-btn">
+              <span class="vbtn-label-small">SERVER</span><span class="vbtn-sub-right" id="set-server-current">not set</span>
+            </button>
+          </div>
+
+          <div class="menu-kbd">
+            <span class="vkbd"><span class="vkbd-k">WASD</span><span>MOVE</span></span>
+            <span class="vkbd"><span class="vkbd-k">MOUSE</span><span>AIM</span></span>
+            <span class="vkbd"><span class="vkbd-k">LMB</span><span>SHOOT</span></span>
+            <span class="vkbd"><span class="vkbd-k">R</span><span>RELOAD</span></span>
+            <span class="vkbd"><span class="vkbd-k">E</span><span>AUTO</span></span>
+            <span class="vkbd"><span class="vkbd-k">F</span><span>REVIVE</span></span>
+            <span class="vkbd"><span class="vkbd-k">ESC</span><span>MENU</span></span>
+          </div>
+        </div>
+
+        <div class="menu-art">
+          <svg viewBox="0 0 600 700" preserveAspectRatio="xMidYMid slice" class="menu-art-svg">
+            <defs>
+              <radialGradient id="ka-vignette" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" stop-color="#08020F" stop-opacity="0" />
+                <stop offset="70%" stop-color="#08020F" stop-opacity="0.4" />
+                <stop offset="100%" stop-color="#08020F" stop-opacity="1" />
+              </radialGradient>
+              <radialGradient id="ka-light" cx="50%" cy="50%" r="40%">
+                <stop offset="0%" stop-color="#2EFFE5" stop-opacity="0.18" />
+                <stop offset="60%" stop-color="#2EFFE5" stop-opacity="0.04" />
+                <stop offset="100%" stop-color="#2EFFE5" stop-opacity="0" />
+              </radialGradient>
+              <filter id="ka-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.5" />
+                <feMerge><feMergeNode /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+            <g stroke="#8E6BB8" stroke-width="0.5" opacity="0.35">
+              <line x1="0" y1="40" x2="600" y2="40" /><line x1="0" y1="80" x2="600" y2="80" /><line x1="0" y1="120" x2="600" y2="120" /><line x1="0" y1="160" x2="600" y2="160" /><line x1="0" y1="200" x2="600" y2="200" /><line x1="0" y1="240" x2="600" y2="240" /><line x1="0" y1="280" x2="600" y2="280" /><line x1="0" y1="320" x2="600" y2="320" /><line x1="0" y1="360" x2="600" y2="360" /><line x1="0" y1="400" x2="600" y2="400" /><line x1="0" y1="440" x2="600" y2="440" /><line x1="0" y1="480" x2="600" y2="480" /><line x1="0" y1="520" x2="600" y2="520" /><line x1="0" y1="560" x2="600" y2="560" /><line x1="0" y1="600" x2="600" y2="600" /><line x1="0" y1="640" x2="600" y2="640" /><line x1="0" y1="680" x2="600" y2="680" />
+              <line x1="40" y1="0" x2="40" y2="700" /><line x1="80" y1="0" x2="80" y2="700" /><line x1="120" y1="0" x2="120" y2="700" /><line x1="160" y1="0" x2="160" y2="700" /><line x1="200" y1="0" x2="200" y2="700" /><line x1="240" y1="0" x2="240" y2="700" /><line x1="280" y1="0" x2="280" y2="700" /><line x1="320" y1="0" x2="320" y2="700" /><line x1="360" y1="0" x2="360" y2="700" /><line x1="400" y1="0" x2="400" y2="700" /><line x1="440" y1="0" x2="440" y2="700" /><line x1="480" y1="0" x2="480" y2="700" /><line x1="520" y1="0" x2="520" y2="700" /><line x1="560" y1="0" x2="560" y2="700" />
+            </g>
+            <g fill="#8E6BB8" fill-opacity="0.4" stroke="#F4ECFF" stroke-opacity="0.25" stroke-width="1">
+              <rect x="40" y="120" width="120" height="20" /><rect x="480" y="200" width="80" height="20" />
+              <rect x="60" y="500" width="20" height="120" /><rect x="500" y="480" width="20" height="140" />
+              <rect x="220" y="600" width="160" height="20" /><rect x="340" y="60" width="20" height="100" />
+            </g>
+            <circle cx="300" cy="350" r="240" fill="url(#ka-light)" />
+            <g opacity="0.85">
+              <g transform="translate(180,200)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(420,200)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(120,320)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(500,320)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(200,500)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(420,500)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(80,420)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(520,420)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(240,140)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(380,140)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(260,560)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+              <g transform="translate(360,560)"><circle r="12" fill="#8E6BB8" stroke="#F4ECFF" stroke-opacity="0.4" stroke-width="1" /><rect x="-4" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /><rect x="1.5" y="-4" width="2.5" height="2.5" fill="#FF1F6E" /></g>
+            </g>
+            <g stroke="#FFE03E" stroke-width="1.4" stroke-linecap="round" filter="url(#ka-glow)">
+              <line x1="306" y1="346" x2="380" y2="280" />
+              <line x1="294" y1="354" x2="220" y2="420" />
+              <line x1="308" y1="358" x2="380" y2="430" />
+            </g>
+            <g transform="translate(300, 350)" filter="url(#ka-glow)">
+              <path d="M 0 0 L 90 -40 L 90 40 Z" fill="#2EFFE5" fill-opacity="0.08" stroke="#2EFFE5" stroke-opacity="0.35" stroke-width="0.8" />
+              <circle r="13" fill="#FF1F6E" stroke="#2EFFE5" stroke-width="1.6" />
+              <rect x="9" y="-2" width="10" height="4" fill="#F4ECFF" />
+              <rect x="18" y="-2" width="3" height="4" fill="#FFE03E" />
+            </g>
+            <rect x="0" y="0" width="600" height="700" fill="url(#ka-vignette)" />
+          </svg>
+          <div class="menu-art-tape">⚠ HOSTILE ZONE</div>
+          <div class="menu-art-bottom">
+            <span class="art-rec">● REC</span>
+            <span class="art-sector">SECTOR.07/N</span>
+            <span class="art-bio">BIO: 87%</span>
+          </div>
+          <div class="menu-art-glitch glitch-1"></div>
+          <div class="menu-art-glitch glitch-2"></div>
+        </div>
       </div>
-      <div class="menu-buttons">
-        <button data-action="solo-horde">SOLO · HORDE</button>
-        <button data-action="solo-arsenal">SOLO · ARSENAL (bots)</button>
-        <button data-action="mp-create">CREATE LOBBY</button>
-        <button data-action="mp-join">JOIN LOBBY</button>
-        <button data-action="set-server" id="set-server-btn">SERVER · <span id="set-server-current">not set</span></button>
-      </div>
-      <div class="menu-foot">WASD move · MOUSE aim · CLICK shoot · E auto-fire · R reload · ESC menu</div>
     </div>
 
     <div id="lobby" class="overlay hidden">
-      <div class="panel">
+      <div class="lobby-header">
         <h2 id="lobby-title">LOBBY</h2>
-        <div id="lobby-code-row">
-          ROOM CODE: <span id="lobby-code">----</span>
+        <span class="mono-dim">ROOM OPEN · WAITING</span>
+      </div>
+      <div class="lobby-grid">
+        <div class="lobby-left">
+          <div class="vpanel vpanel-yellow lobby-code-panel">
+            <div class="panel-tag panel-tag-yellow">// ROOM CODE</div>
+            <div id="lobby-code">----</div>
+            <div class="panel-foot">4 CHARACTERS · CASE INSENSITIVE</div>
+          </div>
+          <div class="lobby-mode-row" id="lobby-mode-row">
+            <button class="mode-card" data-mode="horde">
+              <div class="mode-card-title">HORDE</div>
+              <div class="mode-card-desc">CO-OP · WAVES</div>
+              <div class="mode-card-dot"></div>
+            </button>
+            <button class="mode-card" data-mode="arsenal">
+              <div class="mode-card-title">ARSENAL</div>
+              <div class="mode-card-desc">FFA · CYCLE</div>
+              <div class="mode-card-dot"></div>
+            </button>
+          </div>
+          <div class="vpanel vpanel-dim lobby-config-panel">
+            <div class="panel-tag panel-tag-dim">// CONFIG</div>
+            <div class="kv-row"><span>MAX PLAYERS</span><span>8</span></div>
+            <div class="kv-row"><span>STARTING LIVES</span><span>3</span></div>
+            <div class="kv-row"><span>SHOP TIMER</span><span>15s</span></div>
+            <div class="kv-row"><span>FRIENDLY FIRE</span><span>OFF</span></div>
+          </div>
         </div>
-        <div id="lobby-mode-row">
-          MODE:
-          <button data-mode="horde" class="mode-btn">HORDE</button>
-          <button data-mode="arsenal" class="mode-btn">ARSENAL</button>
-        </div>
-        <div id="lobby-players"></div>
-        <div class="lobby-buttons">
-          <button id="lobby-start">START</button>
-          <button id="lobby-leave">LEAVE</button>
+        <div class="lobby-right">
+          <div class="vpanel vpanel-cyan lobby-ops-panel">
+            <div class="panel-head panel-head-cyan">
+              <span>// OPERATORS</span>
+              <span id="lobby-ops-count">0/8</span>
+            </div>
+            <div id="lobby-players"></div>
+          </div>
+          <div class="lobby-actions">
+            <button id="lobby-start" class="vbig vbig-magenta vbig-filled">◢ START ◣</button>
+            <button id="lobby-leave" class="vbig vbig-dim">LEAVE</button>
+          </div>
         </div>
       </div>
     </div>
 
     <div id="join" class="overlay hidden">
-      <div class="panel">
-        <h2>JOIN LOBBY</h2>
-        <div class="join-hint">Type the 4-character code your friend shared.</div>
-        <input id="join-code" maxlength="4" placeholder="CODE" autocomplete="off" />
-        <div class="lobby-buttons">
-          <button id="join-go" class="primary">JOIN</button>
-          <button id="join-back">BACK</button>
+      <div class="vpanel vpanel-yellow join-panel">
+        <div class="panel-tag panel-tag-yellow">// ROOM CODE</div>
+        <input id="join-code" maxlength="4" placeholder="----" autocomplete="off" />
+        <div class="panel-foot join-hint">Type the 4-character code your friend shared.</div>
+        <div class="join-actions">
+          <button id="join-go" class="vbig vbig-cyan vbig-filled">◢ JOIN ◣</button>
+          <button id="join-back" class="vbig vbig-dim">BACK</button>
         </div>
       </div>
     </div>
 
     <div id="shop" class="overlay hidden">
-      <div class="panel wide">
-        <h2>SHOP · <span id="shop-timer">15</span>s</h2>
-        <div id="shop-cash">$0</div>
-        <div id="shop-grid"></div>
-        <button id="shop-ready">READY</button>
+      <div class="shop-header">
+        <h2>SHOP · INTERMISSION</h2>
+        <div class="shop-header-right">
+          <div class="shop-timer-wrap">
+            <span id="shop-timer">15</span><span class="shop-timer-label">SEC LEFT</span>
+          </div>
+          <div class="shop-header-div"></div>
+          <div class="shop-wallet-wrap">
+            <span id="shop-cash">$0</span><span class="shop-wallet-label">WALLET</span>
+          </div>
+        </div>
+      </div>
+      <div class="shop-grid">
+        <div class="shop-left">
+          <div id="shop-items"></div>
+        </div>
+        <div class="shop-right">
+          <div class="vpanel vpanel-cyan">
+            <div class="panel-tag panel-tag-cyan">// EQUIP</div>
+            <div id="shop-equip-grid"></div>
+          </div>
+          <div class="vpanel vpanel-dim">
+            <div class="panel-tag panel-tag-dim">// SQUAD STATUS</div>
+            <div id="shop-squad"></div>
+          </div>
+          <div class="vpanel vpanel-magenta">
+            <div class="panel-tag panel-tag-magenta">// NEXT WAVE</div>
+            <div id="shop-next-wave-title">WAVE 1</div>
+            <div id="shop-next-wave-desc">HOSTILES INBOUND</div>
+          </div>
+          <button id="shop-ready" class="vbig vbig-acid vbig-filled">◢ READY · SKIP ◣</button>
+        </div>
       </div>
     </div>
 
     <div id="gameover" class="overlay hidden">
-      <div class="panel">
-        <h2 id="gameover-title">DEAD</h2>
+      <div class="go-tape go-tape-top"></div>
+      <div class="go-tape go-tape-bot"></div>
+      <div class="go-content">
+        <div class="go-tag">▌▌ OPERATION TERMINATED ▐▐</div>
+        <h1 id="gameover-title">DEAD<span class="go-dot">.</span></h1>
         <div id="gameover-stats"></div>
-        <button id="gameover-back">BACK TO MENU</button>
+        <div class="go-actions">
+          <button id="gameover-back" class="vbig vbig-fg">◀ MENU</button>
+        </div>
       </div>
     </div>
 
     <div id="net-status"></div>
-    <div id="version" title="click for cheats"></div>
 
     <div id="cheat" class="overlay hidden">
       <div class="panel">
@@ -110,6 +310,8 @@
         </div>
       </div>
     </div>
+
+    <div id="cheat-open" title="click for cheats">⌬</div>
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script type="module" src="./src/main.js"></script>

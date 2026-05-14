@@ -8,7 +8,7 @@ import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { mountVersion } from "./version-display.js";
 import { mountCheats, applyCheat } from "./cheats.js";
 
-const COLORS = ["#ff2e6c", "#00ffd1", "#ffd400", "#8a5cff", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
+const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -334,17 +334,31 @@ function frame(now) {
     if (sim.gameOver && state === "playing") {
       state = "ended";
       const me = sim.players.get(localId);
-      let title, stats, win = false;
+      let title, stats, statTiles, win = false;
+      const aliveMs = sim.timeMs ?? 0;
+      const aliveStr = fmtTime(aliveMs);
       if (sim.mode === "horde") {
         title = "DEAD";
-        stats = [`survived ${sim.wave} waves`, `kills: ${me?.score ?? 0}`, `cash earned: $${me?.cash ?? 0}`];
+        stats = [`SQUAD WIPED`, `WAVE ${pad2(sim.wave)}`, `${aliveStr} ALIVE`];
+        statTiles = [
+          { label: "WAVES",   value: pad2(sim.wave),                color: "magenta" },
+          { label: "KILLS",   value: String(me?.score ?? 0),        color: "acid", hi: true },
+          { label: "CASH",    value: `$${(me?.cash ?? 0).toLocaleString()}`, color: "yellow" },
+          { label: "TIME",    value: aliveStr,                       color: "dim" },
+        ];
       } else {
         win = sim.winnerId === localId;
         title = win ? "WINNER" : "ELIMINATED";
         const w = sim.players.get(sim.winnerId);
-        stats = [`winner: ${w?.name ?? "—"}`, `kills: ${me?.score ?? 0}`];
+        stats = [`WINNER: ${w?.name ?? "—"}`, `${aliveStr} ALIVE`];
+        statTiles = [
+          { label: "KILLS", value: String(me?.score ?? 0), color: "acid", hi: true },
+          { label: "WEAPONS CYCLED", value: String(me?.arsenalKills?.size ?? 0), color: "cyan" },
+          { label: "TIME", value: aliveStr, color: "dim" },
+        ];
       }
-      ui.showGameOver({ title, win, stats });
+      const weaponKills = ARSENAL_ORDER.map((id) => ({ id, count: me?.killsByWeapon?.[id] ?? 0 }));
+      ui.showGameOver({ title, win, stats, statTiles, weaponKills });
       ui.showOnly("gameover");
     }
 
@@ -362,26 +376,32 @@ function processEvents(sim) {
     if (e.type === "kill") {
       const k = sim.players.get(e.killerId);
       const v = e.victimId === -1 ? "ZOMBIE" : sim.players.get(e.victimId)?.name;
-      ui.pushKillFeed(`${k?.name ?? "—"} [${WEAPONS[e.weapon]?.name ?? "?"}] ${v ?? "—"}`);
+      const kc = k?.color || "var(--magenta)";
+      const wn = WEAPONS[e.weapon]?.name ?? "?";
+      ui.pushKillFeed(`<span class="pname" style="color:${kc}">${escapeHtml(k?.name ?? "—")}</span> ▸ <span class="wchip">${escapeHtml(wn)}</span> ${escapeHtml(v ?? "—")}`);
     } else if (e.type === "down") {
       const p = sim.players.get(e.id);
-      ui.pushKillFeed(`${p?.name ?? "—"} DOWNED · HOLD F TO REVIVE`);
+      ui.pushKillFeed(`⚠ <span class="pname" style="color:${p?.color || "var(--magenta)"}">${escapeHtml(p?.name ?? "—")}</span> DOWNED · HOLD F`, { warn: true });
     } else if (e.type === "death") {
       const p = sim.players.get(e.id);
-      ui.pushKillFeed(`${p?.name ?? "—"} BLED OUT`);
+      ui.pushKillFeed(`☠ <span class="pname" style="color:${p?.color || "var(--magenta)"}">${escapeHtml(p?.name ?? "—")}</span> BLED OUT`, { warn: true });
     } else if (e.type === "revive") {
       const p = sim.players.get(e.id);
-      ui.pushKillFeed(`${p?.name ?? "—"} REVIVED`);
+      ui.pushKillFeed(`✚ <span class="pname" style="color:${p?.color || "var(--acid)"}">${escapeHtml(p?.name ?? "—")}</span> REVIVED`);
     } else if (e.type === "buy") {
       const p = sim.players.get(e.playerId);
-      ui.pushKillFeed(`${p?.name ?? "—"} bought ${e.itemName} · -$${e.cost}`);
+      ui.pushKillFeed(`<span class="pname" style="color:${p?.color || "var(--cyan)"}">${escapeHtml(p?.name ?? "—")}</span> bought ${escapeHtml(e.itemName)} · -$${e.cost}`);
       ui.flashShopBuy?.(p?.name ?? "—", e.itemName);
     } else if (e.type === "wave-start") {
-      ui.pushKillFeed(`WAVE ${e.wave} INCOMING`);
+      ui.pushKillFeed(`<span class="wchip">WAVE ${e.wave}</span> INCOMING`);
     } else if (e.type === "wave-end") {
-      ui.pushKillFeed(`WAVE ${e.wave} CLEARED · SHOP OPEN`);
+      ui.pushKillFeed(`<span class="wchip">WAVE ${e.wave}</span> CLEARED · SHOP OPEN`);
     }
   }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
 function updateHUD() {
@@ -394,6 +414,11 @@ function updateHUD() {
   const reloadProgress = reloading && me.reloadDuration > 0
     ? 1 - (me.reloadingUntil - sim.timeMs) / me.reloadDuration
     : 0;
+  const squad = [];
+  for (const [, o] of sim.players) {
+    if (o.id === localId) continue;
+    squad.push({ id: o.id, name: o.name, color: o.color, state: o.state, hp: o.hp, maxHp: o.maxHp });
+  }
   ui.setHUD({
     mode: sim.mode,
     wave: sim.wave,
@@ -412,5 +437,18 @@ function updateHUD() {
     hp: me.hp,
     maxHp: me.maxHp,
     armor: me.armor,
+    score: me.score,
+    aliveMs: sim.timeMs ?? 0,
+    zombiesLeft: sim.zombies?.length ?? 0,
+    inventory: me.inventory || {},
+    squad,
+    ping: null,
   });
+}
+
+function pad2(n) { return String(n).padStart(2, "0"); }
+function fmtTime(ms) {
+  const s = Math.max(0, Math.floor((ms ?? 0) / 1000));
+  const m = Math.floor(s / 60);
+  return `${pad2(m)}:${pad2(s % 60)}`;
 }

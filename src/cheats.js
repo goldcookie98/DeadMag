@@ -1,11 +1,11 @@
 export function mountCheats({ isSolo, run }) {
-  const versionEl = document.getElementById("version");
+  const trigger = document.getElementById("cheat-open") || document.getElementById("version");
   const panel = document.getElementById("cheat");
   const input = document.getElementById("cheat-code");
   const result = document.getElementById("cheat-result");
   const goBtn = document.getElementById("cheat-go");
   const closeBtn = document.getElementById("cheat-close");
-  if (!versionEl || !panel || !input || !goBtn || !closeBtn) return;
+  if (!trigger || !panel || !input || !goBtn || !closeBtn) return;
 
   const open = () => {
     panel.classList.remove("hidden");
@@ -21,7 +21,7 @@ export function mountCheats({ isSolo, run }) {
     result.className = kind || "";
   };
 
-  versionEl.addEventListener("click", open);
+  trigger.addEventListener("click", open);
   closeBtn.addEventListener("click", close);
 
   const submit = () => {
