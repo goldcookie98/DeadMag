@@ -96,7 +96,24 @@
     </div>
 
     <div id="net-status"></div>
-    <div id="version"></div>
+    <div id="version" title="click for cheats"></div>
+
+    <div id="cheat" class="overlay hidden">
+      <div class="panel">
+        <h2>CHEATS</h2>
+        <div class="cheat-hint">Type a code and hit ENTER. Solo modes only.</div>
+        <input id="cheat-code" placeholder="max money" autocomplete="off" />
+        <div id="cheat-result"></div>
+        <div class="lobby-buttons">
+          <button id="cheat-go" class="primary">APPLY</button>
+          <button id="cheat-close">CLOSE</button>
+        </div>
+        <div class="cheat-list">
+          <div class="cheat-list-title">available</div>
+          <div>· max money</div>
+        </div>
+      </div>
+    </div>
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script type="module" src="./src/main.js"></script>

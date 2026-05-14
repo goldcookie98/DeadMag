@@ -283,9 +283,43 @@ button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px r
   letter-spacing: 0.05em;
   color: var(--dim);
   text-shadow: 0 0 6px rgba(0,255,209,0.25);
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
   z-index: 20;
+  padding: 2px 6px;
 }
+#version:hover { color: var(--neon-cyan); text-shadow: 0 0 10px rgba(0,255,209,0.6); }
+
+#cheat .cheat-hint { color: var(--dim); font-size: 12px; letter-spacing: 0.1em; margin-bottom: 10px; }
+#cheat-code {
+  width: 100%;
+  font-family: inherit;
+  background: transparent;
+  color: var(--neon-yellow);
+  border: 1px solid var(--dim-2);
+  padding: 12px;
+  font-size: 16px;
+  margin: 8px 0;
+  letter-spacing: 0.15em;
+  text-transform: lowercase;
+}
+#cheat-code:focus { outline: none; border-color: var(--neon-yellow); box-shadow: 0 0 10px rgba(255,212,0,0.3); }
+#cheat-result {
+  min-height: 18px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  margin: 4px 0 4px;
+}
+#cheat-result.ok { color: var(--good); text-shadow: 0 0 6px rgba(0,255,209,0.5); }
+#cheat-result.err { color: var(--danger); text-shadow: 0 0 6px rgba(255,46,108,0.4); }
+.cheat-list {
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  line-height: 1.6;
+}
+.cheat-list-title { color: var(--neon-cyan); margin-bottom: 4px; opacity: 0.7; }
 
 #gameover-title { color: var(--danger); }
 #gameover-title.win { color: var(--good); }

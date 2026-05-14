@@ -6,6 +6,7 @@ import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { mountVersion } from "./version-display.js";
+import { mountCheats, applyCheat } from "./cheats.js";
 
 const COLORS = ["#ff2e6c", "#00ffd1", "#ffd400", "#8a5cff", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
 
@@ -42,6 +43,10 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 mountVersion();
+mountCheats({
+  isSolo: () => !mp && !!sim,
+  run: (code) => applyCheat(code, { sim, localId }),
+});
 ui.showOnly("menu");
 ui.setNetStatus("");
 
