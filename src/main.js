@@ -1,7 +1,7 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
 import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
-import { render } from "./render.js";
+import { render, recordMuzzleFlash } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
@@ -19,8 +19,17 @@ const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e"
 const INPUT_SEND_INTERVAL_MS = 33;
 const PREDICT_BASE_SPEED = 220;
 const PREDICT_PLAYER_R = 14;
-const PREDICT_RECONCILE_RATE = 0.2;     // pull toward server pos each snapshot
-const PREDICT_HARD_SNAP_PX = 220;       // snap instantly past this drift
+// Per-frame pull rates (compound across ~2 frames per server snapshot at 60fps).
+// Idle: pull toward server briskly so any drift settles when player stops.
+// Driving: don't pull at all — the server's "current" position is intrinsically
+// RTT-behind our predict, and reconciling against it while moving creates
+// visible jitter when changing direction. Drift only matters when stopped.
+const PREDICT_IDLE_PULL    = 0.18;
+const PREDICT_DRIVE_PULL   = 0.0;
+const PREDICT_DEADZONE_PX  = 6;          // below this, snap exactly to predict
+const PREDICT_BIG_DRIFT_PX = 90;         // above this, pull strongly even mid-move
+const PREDICT_BIG_PULL     = 0.12;
+const PREDICT_HARD_SNAP_PX = 280;        // explosion knockback / desync floor
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -46,6 +55,9 @@ const STATE_BUFFER_MAX_MS = 600;
 let stateBuffer = [];
 let predictMe = null;          // { x, y, angle } — local player's predicted pose
 let _lastInputSendAt = 0;
+let _lastSentShoot = false;
+let _lastSentReload = false;
+let _lastLocalFireAt = 0;      // gates client-side muzzle flash to weapon rate
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -221,6 +233,9 @@ function setupMpHandlers() {
     sim = createSim(mode);
     stateBuffer = [];
     predictMe = null;
+    _lastSentShoot = false;
+    _lastSentReload = false;
+    _lastLocalFireAt = 0;
     ui.showOnly();
   });
   mp.on("state", (data) => {
@@ -231,7 +246,6 @@ function setupMpHandlers() {
       stateBuffer.shift();
     }
     sim = inflated;
-    reconcilePredict(inflated.players.get(localId));
     if (sim.events?.length) processEvents(sim);
   });
   mp.on("disconnected", (reason) => {
@@ -364,10 +378,15 @@ function advancePredict(dt, snap, me) {
   predictMe.angle = Math.atan2(snap.aimY - predictMe.y, snap.aimX - predictMe.x);
 }
 
-function reconcilePredict(serverMe) {
+// Per-frame reconciliation that doesn't fight the player's input. While an axis
+// is being driven, the server's authoritative position is intrinsically lagged
+// by ~RTT/2; pulling toward it would yank the predicted character backward on
+// direction changes (the "jitter" symptom). So we hold steady while moving and
+// only converge when stopped, with a strong override for very large drift
+// (knockback, explosion, teleport, etc).
+function reconcilePerFrame(snap, serverMe) {
   if (!serverMe) return;
   if (serverMe.state !== "alive") {
-    // Downed/dead: server is authoritative, no point predicting.
     predictMe = { x: serverMe.x, y: serverMe.y, angle: serverMe.angle };
     return;
   }
@@ -377,13 +396,20 @@ function reconcilePredict(serverMe) {
   }
   const dx = serverMe.x - predictMe.x;
   const dy = serverMe.y - predictMe.y;
-  if (dx * dx + dy * dy > PREDICT_HARD_SNAP_PX * PREDICT_HARD_SNAP_PX) {
+  const d2 = dx * dx + dy * dy;
+  if (d2 > PREDICT_HARD_SNAP_PX * PREDICT_HARD_SNAP_PX) {
     predictMe.x = serverMe.x;
     predictMe.y = serverMe.y;
     return;
   }
-  predictMe.x += dx * PREDICT_RECONCILE_RATE;
-  predictMe.y += dy * PREDICT_RECONCILE_RATE;
+  if (d2 < PREDICT_DEADZONE_PX * PREDICT_DEADZONE_PX) return;
+  const drivingX = (snap?.mx ?? 0) !== 0;
+  const drivingY = (snap?.my ?? 0) !== 0;
+  const big = d2 > PREDICT_BIG_DRIFT_PX * PREDICT_BIG_DRIFT_PX;
+  const rateX = big ? PREDICT_BIG_PULL : (drivingX ? PREDICT_DRIVE_PULL : PREDICT_IDLE_PULL);
+  const rateY = big ? PREDICT_BIG_PULL : (drivingY ? PREDICT_DRIVE_PULL : PREDICT_IDLE_PULL);
+  predictMe.x += dx * rateX;
+  predictMe.y += dy * rateY;
 }
 
 let last = performance.now();
@@ -399,13 +425,36 @@ function frame(now) {
       processEvents(sim);
     } else {
       const nowSend = performance.now();
-      if (nowSend - _lastInputSendAt >= INPUT_SEND_INTERVAL_MS) {
+      // Bypass the 30Hz throttle on the FIRST frame an action becomes true
+      // (click, reload tap) — otherwise the server can wait up to a full
+      // tick before even seeing the input. Held actions keep the throttle.
+      const shootEdge  = snap.shoot  && !_lastSentShoot;
+      const reloadEdge = snap.reload && !_lastSentReload;
+      const edge = shootEdge || reloadEdge;
+      if (edge || nowSend - _lastInputSendAt >= INPUT_SEND_INTERVAL_MS) {
         mp.sendInput(snap);
         _lastInputSendAt = nowSend;
+        _lastSentShoot = snap.shoot;
+        _lastSentReload = snap.reload;
       }
       const meAuth = sim.players.get(localId);
-      if (meAuth && meAuth.state === "alive") advancePredict(dt, snap, meAuth);
-      else if (meAuth) predictMe = { x: meAuth.x, y: meAuth.y, angle: meAuth.angle };
+      if (meAuth) {
+        reconcilePerFrame(snap, meAuth);
+        if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
+        // Client-side muzzle flash for instant click feedback. The actual hit
+        // is still server-authoritative; this just hides the round-trip floor.
+        if (shootEdge && predictMe && meAuth.state === "alive") {
+          const w = WEAPONS[meAuth.weapon];
+          const cooldownMs = w?.rate ?? 100;
+          const ready = nowSend - _lastLocalFireAt >= cooldownMs * 0.9
+            && meAuth.ammo > 0
+            && (sim.timeMs ?? 0) >= (meAuth.reloadingUntil ?? 0);
+          if (ready) {
+            recordMuzzleFlash(predictMe.x, predictMe.y, predictMe.angle, meAuth.weapon, nowSend);
+            _lastLocalFireAt = nowSend;
+          }
+        }
+      }
     }
 
     let renderSim = mp ? buildRenderSim() : sim;

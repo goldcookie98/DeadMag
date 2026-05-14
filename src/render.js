@@ -14,6 +14,12 @@ const VOLT = {
 };
 
 const _bloodDecals = [];
+// Local-only muzzle flashes for the client player's shots. Driven by main.js
+// on click edge so the user sees their gun fire instantly instead of waiting
+// for the server's bullet to round-trip back. Uses wall-clock (performance.now)
+// since it's a UI effect, not part of sim.timeMs.
+const _muzzleFlashes = [];
+const MUZZLE_LIFE_MS = 70;
 
 export function render(ctx, sim, camera, localId, mouse) {
   const { vw, vh } = camera;
@@ -38,6 +44,7 @@ export function render(ctx, sim, camera, localId, mouse) {
   }
 
   drawBullets(ctx, sim.bullets);
+  drawMuzzleFlashes(ctx);
 
   ctx.restore();
 
@@ -47,6 +54,42 @@ export function render(ctx, sim, camera, localId, mouse) {
 export function recordZombieDeath(x, y, timeMs) {
   _bloodDecals.push({ x, y, t: timeMs, life: 6000 + Math.random() * 3000, r: 9 + Math.random() * 13, rot: Math.random() * Math.PI });
   if (_bloodDecals.length > 60) _bloodDecals.shift();
+}
+
+export function recordMuzzleFlash(x, y, angle, weapon, wallClockMs) {
+  _muzzleFlashes.push({ x, y, angle, weapon, t: wallClockMs });
+  if (_muzzleFlashes.length > 12) _muzzleFlashes.shift();
+}
+
+function drawMuzzleFlashes(ctx) {
+  if (_muzzleFlashes.length === 0) return;
+  const now = performance.now();
+  for (let i = _muzzleFlashes.length - 1; i >= 0; i--) {
+    const f = _muzzleFlashes[i];
+    const age = (now - f.t) / MUZZLE_LIFE_MS;
+    if (age >= 1) { _muzzleFlashes.splice(i, 1); continue; }
+    const fade = 1 - age;
+    const reach = 22 + age * 14;
+    const tipX = f.x + Math.cos(f.angle) * (16 + reach * 0.5);
+    const tipY = f.y + Math.sin(f.angle) * (16 + reach * 0.5);
+    ctx.save();
+    ctx.translate(tipX, tipY);
+    ctx.rotate(f.angle);
+    ctx.globalAlpha = fade;
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = VOLT.yellow;
+    ctx.fillStyle = VOLT.yellow;
+    ctx.beginPath();
+    ctx.moveTo(reach, 0);
+    ctx.lineTo(0, -5 * fade);
+    ctx.lineTo(0,  5 * fade);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = VOLT.fg;
+    ctx.fillRect(-2, -1.5, 5, 3);
+    ctx.restore();
+  }
 }
 
 function drawBlood(ctx, timeMs) {
