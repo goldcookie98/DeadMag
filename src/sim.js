@@ -9,6 +9,9 @@ const ZOMBIE_HIT_COOLDOWN = 600;
 const RESPAWN_MS = 2200;
 const SHOP_DURATION_MS = 15000;
 const WAVE_INTERMISSION_MS = 1500;
+const DOWN_BLEED_MS = 30000;
+const REVIVE_TIME_MS = 5000;
+const REVIVE_RANGE = PLAYER_R * 3.2;
 
 let _id = 1;
 const nextId = () => _id++;
@@ -31,7 +34,11 @@ export function makePlayer(name, color, isBot = false) {
     cash: 0,
     lives: 3,
     alive: true,
+    state: "alive",
     deathAt: 0,
+    downedAt: 0,
+    bleedOutAt: 0,
+    reviveProgress: 0,
     upgrades: { dmg: 0, rate: 0, reload: 0, speed: 0 },
     arsenalKills: new Set(),
     score: 0,
@@ -234,16 +241,45 @@ function finishReloads(sim) {
 }
 
 function damagePlayer(sim, target, amount, attacker) {
-  if (!target.alive) return;
+  if (target.state === "dead") return;
   const absorb = Math.min(target.armor, amount * 0.6);
   target.armor = Math.max(0, target.armor - absorb);
   const taken = amount - absorb;
   target.hp -= taken;
-  if (target.hp <= 0) onPlayerDeath(sim, target, attacker);
+  if (target.hp > 0) return;
+
+  if (sim.mode === "horde") {
+    if (target.state === "alive") onPlayerDown(sim, target);
+    else if (target.state === "down") onPlayerDead(sim, target, attacker);
+  } else {
+    onPlayerDeath(sim, target, attacker);
+  }
+}
+
+function onPlayerDown(sim, target) {
+  target.state = "down";
+  target.alive = false;
+  target.hp = 0;
+  target.downedAt = sim.timeMs;
+  target.bleedOutAt = sim.timeMs + DOWN_BLEED_MS;
+  target.reviveProgress = 0;
+  target.reloadingUntil = 0;
+  sim.events.push({ type: "down", id: target.id });
+}
+
+function onPlayerDead(sim, target, attacker) {
+  target.state = "dead";
+  target.alive = false;
+  target.hp = 0;
+  target.deathAt = sim.timeMs;
+  target.lives -= 1;
+  target.reviveProgress = 0;
+  sim.events.push({ type: "death", id: target.id, killerId: attacker?.id ?? null });
 }
 
 function onPlayerDeath(sim, target, attacker) {
   target.alive = false;
+  target.state = "dead";
   target.hp = 0;
   target.deathAt = sim.timeMs;
   target.lives -= 1;
@@ -264,6 +300,52 @@ function onPlayerDeath(sim, target, attacker) {
   }
 }
 
+function updateDowns(sim, dt) {
+  if (sim.mode !== "horde") return;
+  for (const [, p] of sim.players) {
+    if (p.state !== "down") continue;
+    if (sim.timeMs >= p.bleedOutAt) {
+      onPlayerDead(sim, p, null);
+      continue;
+    }
+    let reviverNear = false;
+    for (const [, r] of sim.players) {
+      if (r.id === p.id || r.state !== "alive") continue;
+      const input = sim.inputs.get(r.id);
+      if (!input?.revive) continue;
+      const d = Math.hypot(r.x - p.x, r.y - p.y);
+      if (d <= REVIVE_RANGE) { reviverNear = true; break; }
+    }
+    if (reviverNear) {
+      p.reviveProgress += dt * 1000;
+      if (p.reviveProgress >= REVIVE_TIME_MS) revivePlayer(sim, p, 50);
+    } else if (p.reviveProgress > 0) {
+      p.reviveProgress = Math.max(0, p.reviveProgress - dt * 1500);
+    }
+  }
+}
+
+function revivePlayer(sim, p, hp) {
+  p.state = "alive";
+  p.alive = true;
+  p.hp = Math.min(p.maxHp, hp);
+  p.reviveProgress = 0;
+  p.bleedOutAt = 0;
+  p.downedAt = 0;
+  p.reloadingUntil = 0;
+  p.ammo = WEAPONS[p.weapon].mag;
+  sim.events.push({ type: "revive", id: p.id });
+}
+
+export function shopRevive(sim, playerId) {
+  const p = sim.players.get(playerId);
+  if (!p || p.state !== "dead") return false;
+  const sp = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+  p.x = sp.x; p.y = sp.y;
+  revivePlayer(sim, p, p.maxHp);
+  return true;
+}
+
 function onZombieDeath(sim, z, killer) {
   sim.zombies = sim.zombies.filter((zz) => zz !== z);
   if (killer) {
@@ -278,6 +360,10 @@ function respawnPlayer(sim, p) {
   const sp = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
   p.x = sp.x; p.y = sp.y;
   p.hp = p.maxHp; p.alive = true;
+  p.state = "alive";
+  p.downedAt = 0;
+  p.bleedOutAt = 0;
+  p.reviveProgress = 0;
   p.ammo = WEAPONS[p.weapon].mag;
   p.reloadingUntil = 0;
   sim.events.push({ type: "respawn", id: p.id });
@@ -425,9 +511,6 @@ function updateHorde(sim) {
     sim.waveActive = true;
     sim.zombieSpawnAt = sim.timeMs;
     sim.events.push({ type: "wave-start", wave: sim.wave });
-    for (const [, p] of sim.players) {
-      if (p.lives > 0 && !p.alive) respawnPlayer(sim, p);
-    }
   }
 
   if (sim.waveActive && sim.zombiesToSpawn > 0 && sim.timeMs >= sim.zombieSpawnAt) {
@@ -514,6 +597,7 @@ export function step(sim, dt) {
   updatePlayers(sim, dt);
   updateBullets(sim, dt);
   updateZombies(sim, dt);
+  updateDowns(sim, dt);
   finishReloads(sim);
   updateHorde(sim);
   updateRespawns(sim);
@@ -523,12 +607,13 @@ export function step(sim, dt) {
 export function shopBuy(sim, playerId, itemId) {
   const p = sim.players.get(playerId);
   if (!p || !sim.shopOpen) return false;
+  if (p.state !== "alive") return false;
   const item = SHOP_ITEMS.find((i) => i.id === itemId);
   if (!item) return false;
-  if (p.cash < item.cost(p)) return false;
-  if (!item.canBuy(p)) return false;
-  p.cash -= item.cost(p);
-  item.apply(p);
+  if (p.cash < item.cost(p, sim)) return false;
+  if (!item.canBuy(p, sim)) return false;
+  p.cash -= item.cost(p, sim);
+  item.apply(p, sim);
   return true;
 }
 
@@ -545,6 +630,12 @@ export const SHOP_ITEMS = [
   { id: "armor",       name: "ARMOR +50",    desc: "Absorbs 60% of dmg.",       cost: () => 500, canBuy: (p) => p.armor < 150, apply: (p) => p.armor = Math.min(150, p.armor + 50) },
   { id: "heal",        name: "MEDKIT",       desc: "Full heal.",                cost: () => 250, canBuy: (p) => p.hp < p.maxHp, apply: (p) => p.hp = p.maxHp },
   { id: "life",        name: "EXTRA LIFE",   desc: "+1 life.",                  cost: () => 2000, canBuy: () => true, apply: (p) => p.lives += 1 },
+  { id: "revive",      name: "REVIVE MATE",  desc: "Bring a dead teammate back.", cost: () => 1500,
+    canBuy: (p, sim) => !!sim && [...sim.players.values()].some((o) => o.id !== p.id && o.state === "dead" && o.lives > 0),
+    apply:  (p, sim) => {
+      const dead = [...sim.players.values()].find((o) => o.id !== p.id && o.state === "dead" && o.lives > 0);
+      if (dead) shopRevive(sim, dead.id);
+    } },
 ];
 
 export function switchWeapon(sim, playerId, weaponId) {

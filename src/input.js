@@ -4,6 +4,7 @@ const KEYS = {
   left:  new Set(["KeyA", "ArrowLeft"]),
   right: new Set(["KeyD", "ArrowRight"]),
   reload: new Set(["KeyR"]),
+  revive: new Set(["KeyF"]),
   escape: new Set(["Escape"]),
 };
 
@@ -70,6 +71,7 @@ export class Input {
       aimX: wx, aimY: wy,
       shoot: this.mouse.down || this.autoFire,
       reload: this.consumeReload(),
+      revive: this.has("revive"),
     };
   }
 }

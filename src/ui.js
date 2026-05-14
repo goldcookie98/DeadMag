@@ -80,7 +80,8 @@ export class UI {
     this.el.lobbyStart.style.opacity = canStart ? "1" : "0.4";
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire }) {
+  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs }) {
+    this._setStatusOverlay(playerState, bleedLeftMs, reviveProgressMs);
     this.el.mode.textContent = mode ? `MODE · ${mode.toUpperCase()}` : "";
     if (mode === "horde") {
       this.el.wave.textContent = wave > 0 ? `WAVE ${wave}` : "STANDBY";
@@ -126,7 +127,33 @@ export class UI {
 
   setNetStatus(text) { this.el.netStatus.textContent = text; }
 
-  renderShop(player, timeLeftMs) {
+  _setStatusOverlay(state, bleedLeftMs, reviveProgressMs) {
+    let el = document.getElementById("hud-status");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "hud-status";
+      el.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;z-index:10;font-family:ui-monospace,monospace;";
+      document.body.appendChild(el);
+    }
+    if (state === "down") {
+      const secs = Math.max(0, Math.ceil((bleedLeftMs ?? 0) / 1000));
+      const rev = Math.max(0, Math.min(100, ((reviveProgressMs ?? 0) / 5000) * 100));
+      el.innerHTML = `<div style="color:#ff2e6c;font-size:42px;letter-spacing:0.3em;text-shadow:0 0 12px #ff2e6c">DOWNED</div>
+        <div style="color:#ffd400;font-size:13px;letter-spacing:0.2em;margin-top:6px">BLEED OUT IN ${secs}s · HOLD F NEAR TEAMMATE</div>
+        <div style="margin-top:10px;width:240px;height:6px;background:#1a1a26;border:1px solid #00ffd1">
+          <div style="width:${rev}%;height:100%;background:#00ffd1"></div>
+        </div>`;
+      el.style.display = "block";
+    } else if (state === "dead") {
+      el.innerHTML = `<div style="color:#ff2e6c;font-size:42px;letter-spacing:0.3em;text-shadow:0 0 12px #ff2e6c">DEAD</div>
+        <div style="color:#ffd400;font-size:13px;letter-spacing:0.2em;margin-top:6px">WAIT FOR TEAMMATE TO BUY REVIVE FROM SHOP</div>`;
+      el.style.display = "block";
+    } else {
+      el.style.display = "none";
+    }
+  }
+
+  renderShop(player, timeLeftMs, sim) {
     this.el.shopCash.textContent = `$${player.cash}`;
     this.el.shopTimer.textContent = Math.max(0, Math.ceil(timeLeftMs / 1000));
     const ownedWeapons = Object.keys(player.inventory);
@@ -134,8 +161,8 @@ export class UI {
 
     this.el.shopGrid.innerHTML = "";
     for (const it of SHOP_ITEMS) {
-      const can = it.canBuy(player);
-      const cost = it.cost(player);
+      const can = it.canBuy(player, sim);
+      const cost = it.cost(player, sim);
       const afford = player.cash >= cost && can;
       const card = document.createElement("div");
       card.className = "shop-card" + (afford ? "" : " disabled");

@@ -6,7 +6,9 @@
 
 ## Modes
 
-**Horde** (co-op, 2–4) — Survive zombie waves. Kills earn cash. Between waves the shop opens: new guns, +damage/+fire-rate/+reload/+speed upgrades, armour, medkits, extra lives. Run ends when the team is out of lives.
+**Horde** (co-op, 2–4) — Survive zombie waves. Kills earn cash. Between waves the shop opens: new guns, +damage/+fire-rate/+reload/+speed upgrades, armour, medkits, extra lives, plus **Revive Mate** ($1500) to bring back a dead teammate.
+
+Three states when playing with others: **alive** → **downed** (hp 0, bleeding out in 30s — a teammate can hold `F` next to you for 5s to revive) → **dead** (lost a life, can only return when a teammate buys Revive Mate from the shop).
 
 **Arsenal** (FFA, 2–8) — Everyone starts with the same gun. Each kill cycles **your** weapon to the next: pistol → shotgun → SMG → sniper → rocket → knife. First to land a kill with every weapon wins.
 
@@ -16,6 +18,8 @@
 - Mouse — aim
 - Left click — shoot
 - `R` — reload
+- `E` — toggle auto-fire
+- `F` — hold near a downed teammate to revive (5s)
 - `Esc` — back to menu
 
 ## Run it

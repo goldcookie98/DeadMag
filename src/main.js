@@ -222,6 +222,7 @@ function serializeSimForNet(sim) {
       weapon: p.weapon, inventory: p.inventory, ammo: p.ammo,
       reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
       cash: p.cash, lives: p.lives, alive: p.alive,
+      state: p.state, downedAt: p.downedAt, bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
       upgrades: p.upgrades,
       arsenalKills: [...p.arsenalKills],
       score: p.score,
@@ -281,7 +282,7 @@ function frame(now) {
     if (sim.shopOpen) {
       if (ui.el.shop.classList.contains("hidden")) ui.showOnly("shop");
       const me = sim.players.get(localId);
-      if (me) ui.renderShop(me, sim.shopOpenUntil - sim.timeMs);
+      if (me) ui.renderShop(me, sim.shopOpenUntil - sim.timeMs, sim);
     } else if (!ui.el.shop.classList.contains("hidden")) {
       ui.showOnly();
     }
@@ -318,6 +319,15 @@ function processEvents(sim) {
       const k = sim.players.get(e.killerId);
       const v = e.victimId === -1 ? "ZOMBIE" : sim.players.get(e.victimId)?.name;
       ui.pushKillFeed(`${k?.name ?? "—"} [${WEAPONS[e.weapon]?.name ?? "?"}] ${v ?? "—"}`);
+    } else if (e.type === "down") {
+      const p = sim.players.get(e.id);
+      ui.pushKillFeed(`${p?.name ?? "—"} DOWNED · HOLD F TO REVIVE`);
+    } else if (e.type === "death") {
+      const p = sim.players.get(e.id);
+      ui.pushKillFeed(`${p?.name ?? "—"} BLED OUT`);
+    } else if (e.type === "revive") {
+      const p = sim.players.get(e.id);
+      ui.pushKillFeed(`${p?.name ?? "—"} REVIVED`);
     } else if (e.type === "wave-start") {
       ui.pushKillFeed(`WAVE ${e.wave} INCOMING`);
     } else if (e.type === "wave-end") {
@@ -348,5 +358,8 @@ function updateHUD() {
     lives: me.lives,
     arsenalProgress,
     autoFire: input.autoFire,
+    playerState: me.state,
+    bleedLeftMs: me.state === "down" ? Math.max(0, me.bleedOutAt - sim.timeMs) : 0,
+    reviveProgressMs: me.reviveProgress || 0,
   });
 }

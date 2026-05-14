@@ -29,8 +29,9 @@ export function render(ctx, sim, camera, localId, mouse) {
   for (const z of sim.zombies) drawZombie(ctx, z);
 
   for (const [, p] of sim.players) {
-    if (!p.alive) continue;
-    drawPlayer(ctx, p, p.id === localId);
+    if (p.state === "dead") continue;
+    if (p.state === "down") drawDownedPlayer(ctx, p, p.id === localId, sim.timeMs);
+    else drawPlayer(ctx, p, p.id === localId);
   }
 
   ctx.fillStyle = "#ffd400";
@@ -103,6 +104,47 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "center";
   ctx.fillText(p.name, p.x, p.y - r - 22);
+}
+
+function drawDownedPlayer(ctx, p, isLocal, timeMs) {
+  const r = CONSTANTS.PLAYER_R;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.fillStyle = "rgba(255,46,108,0.35)";
+  ctx.beginPath();
+  ctx.arc(0, 0, r + 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = isLocal ? "#ffd400" : "rgba(255,46,108,0.9)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255,46,108,0.7)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.6, -r * 0.6); ctx.lineTo(r * 0.6,  r * 0.6);
+  ctx.moveTo( r * 0.6, -r * 0.6); ctx.lineTo(-r * 0.6, r * 0.6);
+  ctx.stroke();
+  ctx.restore();
+
+  const bleedLeft = Math.max(0, (p.bleedOutAt - timeMs) / 30000);
+  ctx.strokeStyle = bleedLeft < 0.25 ? "#ff2e6c" : "#ffd400";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r + 8, -Math.PI / 2, -Math.PI / 2 + bleedLeft * Math.PI * 2);
+  ctx.stroke();
+
+  const rev = Math.max(0, Math.min(1, (p.reviveProgress || 0) / 5000));
+  if (rev > 0) {
+    ctx.strokeStyle = "#00ffd1";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r + 14, -Math.PI / 2, -Math.PI / 2 + rev * Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#ff2e6c";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(p.name + " · DOWN", p.x, p.y - r - 12);
 }
 
 function drawZombie(ctx, z) {
