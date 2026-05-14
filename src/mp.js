@@ -1,6 +1,8 @@
-import { joinRoom, selfId } from "https://esm.sh/trystero@0.21.5/nostr";
+import { joinRoom, selfId } from "https://esm.sh/trystero@0.21.5/torrent";
 
 const APP_ID = "deadmag-v1";
+const DEBUG = true;
+const log = (...a) => { if (DEBUG) console.log("[mp]", ...a); };
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 export function generateCode() {
@@ -43,7 +45,9 @@ export class Mp {
   }
 
   async _connect() {
+    log("selfId", selfId, "code", this.code, "isHost", this.isHost);
     this.room = joinRoom({ appId: APP_ID }, this.code);
+    log("room created");
 
     const mk = (n) => {
       const [send, recv] = this.room.makeAction(n);
@@ -61,6 +65,7 @@ export class Mp {
     const rReady   = mk("ready");
 
     rHello((data, peerId) => {
+      log("hello from", peerId.slice(0, 6), "name", data?.name);
       this.peers.set(peerId, { name: data?.name || ("P_" + peerId.slice(0, 4)) });
       this.handlers.peers?.();
       if (this.isHost) {
@@ -106,11 +111,13 @@ export class Mp {
     });
 
     this.room.onPeerJoin((peerId) => {
+      log("onPeerJoin", peerId.slice(0, 6));
       this._sayHello(peerId);
       const rs = this._firstPeerResolvers.splice(0);
       for (const r of rs) r();
     });
     this.room.onPeerLeave((peerId) => {
+      log("onPeerLeave", peerId.slice(0, 6));
       this.peers.delete(peerId);
       this.handlers.peerLeft?.(peerId);
       this.handlers.peers?.();
