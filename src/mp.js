@@ -21,6 +21,8 @@ export class Mp {
     this.lobbyMode = "horde";
     this.handlers = {};
     this._actions = {};
+    this._helloRetry = null;
+    this._firstPeerResolvers = [];
   }
 
   on(ev, fn) { this.handlers[ev] = fn; }
@@ -56,7 +58,6 @@ export class Mp {
     const rBuy     = mk("buy");
     const rEquip   = mk("equip");
     const rMode    = mk("mode");
-    const rReload  = mk("reload");
     const rReady   = mk("ready");
 
     rHello((data, peerId) => {
@@ -100,22 +101,49 @@ export class Mp {
       if (this.isHost) this.handlers.peerEquip?.(peerId, data);
     });
 
-    rReload((_, peerId) => {
-      if (this.isHost) this.handlers.peerReload?.(peerId);
-    });
-
     rReady((data, peerId) => {
       if (this.isHost) this.handlers.peerReady?.(peerId, !!data?.ready);
     });
 
     this.room.onPeerJoin((peerId) => {
-      try { this._actions.hello({ name: this.myName }, peerId); } catch {}
+      this._sayHello(peerId);
+      const rs = this._firstPeerResolvers.splice(0);
+      for (const r of rs) r();
     });
     this.room.onPeerLeave((peerId) => {
       this.peers.delete(peerId);
       this.handlers.peerLeft?.(peerId);
       this.handlers.peers?.();
       if (this.isHost) this._actions.lobby({ players: this.roster(), mode: this.lobbyMode });
+    });
+  }
+
+  _sayHello(peerId) {
+    const send = () => {
+      try {
+        if (peerId) this._actions.hello?.({ name: this.myName }, peerId);
+        else this._actions.hello?.({ name: this.myName });
+      } catch {}
+    };
+    send();
+    setTimeout(send, 250);
+    setTimeout(send, 800);
+    setTimeout(() => { try { this._actions.hello?.({ name: this.myName }); } catch {} }, 1800);
+  }
+
+  waitForPeer(timeoutMs) {
+    if (this.peers.size > 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const ok = () => { if (done) return; done = true; resolve(); };
+      this._firstPeerResolvers.push(ok);
+      setTimeout(() => {
+        if (done) return;
+        done = true;
+        const idx = this._firstPeerResolvers.indexOf(ok);
+        if (idx >= 0) this._firstPeerResolvers.splice(idx, 1);
+        reject(new Error("ROOM NOT FOUND"));
+      }, timeoutMs);
     });
   }
 
@@ -146,7 +174,6 @@ export class Mp {
   broadcastState(state)   { if (this.isHost) this._actions.state(state); }
   sendBuy(itemId)         { if (!this.isHost) this._actions.buy({ itemId }); }
   sendEquip(weapon)       { if (!this.isHost) this._actions.equip({ weapon }); }
-  sendReload()            { if (!this.isHost) this._actions.reload({}); }
   sendReady(ready)        { if (!this.isHost) this._actions.ready({ ready: !!ready }); }
 
   leave() {

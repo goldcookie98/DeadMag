@@ -1,6 +1,6 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, reloadPlayer, setReady, CONSTANTS } from "./sim.js";
+import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, setReady, CONSTANTS } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, SELF_ID } from "./mp.js";
@@ -121,19 +121,24 @@ async function joinSubmit(code) {
   if (!/^[A-Z0-9]{4}$/.test(code)) { alert("Code must be 4 chars."); return; }
   ui.showOnly("lobby");
   ui.setNetStatus("CONNECTING…");
-  ui.setLobby({ code, title: "LOBBY", players: [], mode: "horde", canStart: false });
+  ui.setLobby({ code, title: "LOBBY · SEARCHING", players: [], mode: "horde", canStart: false });
   try {
     mp = new Mp();
     setupMpHandlers();
     await mp.join(code, myName);
     roomCode = code;
+    ui.setNetStatus("SEARCHING FOR HOST…");
+    await mp.waitForPeer(8000);
     isHost = false;
     state = "lobby";
     lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: null };
     renderLobby();
     ui.setNetStatus("ONLINE · P2P");
   } catch (e) {
-    alert("Couldn't join: " + (e?.message ?? e));
+    const msg = (e?.message === "ROOM NOT FOUND")
+      ? `No host found for room ${code}. Double-check the code (host must have the lobby open).`
+      : "Couldn't join: " + (e?.message ?? e);
+    alert(msg);
     leaveToMenu();
   }
 }
@@ -171,10 +176,6 @@ function setupMpHandlers() {
   mp.on("peerEquip", (peerId, data) => {
     const pid = peerIdToPlayerId.get(peerId);
     if (pid != null && sim) switchWeapon(sim, pid, data.weapon);
-  });
-  mp.on("peerReload", (peerId) => {
-    const pid = peerIdToPlayerId.get(peerId);
-    if (pid != null && sim) reloadPlayer(sim, pid);
   });
   mp.on("peerReady", (peerId, ready) => {
     const pid = peerIdToPlayerId.get(peerId);
@@ -281,8 +282,6 @@ function frame(now) {
       processEvents(sim);
       mp.broadcastState(serializeSimForNet(sim));
     } else {
-      if (snap.reload) mp.sendReload();
-      snap.reload = false;
       mp.sendInput(snap);
     }
 

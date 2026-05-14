@@ -70,7 +70,7 @@ export class Input {
       mx, my,
       aimX: wx, aimY: wy,
       shoot: this.mouse.down || this.autoFire,
-      reload: this.consumeReload(),
+      reload: this.has("reload") || this.consumeReload(),
       revive: this.has("revive"),
     };
   }
