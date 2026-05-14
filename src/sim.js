@@ -34,6 +34,7 @@ export function makePlayer(name, color, isBot = false) {
     cash: 0,
     lives: 3,
     alive: true,
+    ready: false,
     state: "alive",
     deathAt: 0,
     downedAt: 0,
@@ -496,12 +497,20 @@ function updateHorde(sim) {
     sim.waveActive = false;
     sim.shopOpen = true;
     sim.shopOpenUntil = sim.timeMs + SHOP_DURATION_MS;
-    for (const [, p] of sim.players) p.cash += 50 + sim.wave * 10;
+    for (const [, p] of sim.players) { p.cash += 50 + sim.wave * 10; p.ready = false; }
     sim.events.push({ type: "wave-end", wave: sim.wave });
+  }
+
+  if (sim.shopOpen) {
+    const alive = [...sim.players.values()].filter((p) => p.state === "alive");
+    if (alive.length > 0 && alive.every((p) => p.ready)) {
+      sim.shopOpenUntil = sim.timeMs;
+    }
   }
 
   if (sim.shopOpen && sim.timeMs >= sim.shopOpenUntil) {
     sim.shopOpen = false;
+    for (const [, p] of sim.players) p.ready = false;
     sim.nextWaveAt = sim.timeMs + WAVE_INTERMISSION_MS;
   }
 
@@ -610,11 +619,19 @@ export function shopBuy(sim, playerId, itemId) {
   if (p.state !== "alive") return false;
   const item = SHOP_ITEMS.find((i) => i.id === itemId);
   if (!item) return false;
-  if (p.cash < item.cost(p, sim)) return false;
+  const cost = item.cost(p, sim);
+  if (p.cash < cost) return false;
   if (!item.canBuy(p, sim)) return false;
-  p.cash -= item.cost(p, sim);
+  p.cash -= cost;
   item.apply(p, sim);
+  sim.events.push({ type: "buy", playerId: p.id, itemId, itemName: item.name, cost });
   return true;
+}
+
+export function setReady(sim, playerId, value) {
+  const p = sim.players.get(playerId);
+  if (!p || !sim.shopOpen) return;
+  p.ready = !!value;
 }
 
 export const SHOP_ITEMS = [

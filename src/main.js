@@ -1,6 +1,6 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, reloadPlayer, CONSTANTS } from "./sim.js";
+import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, reloadPlayer, setReady, CONSTANTS } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, SELF_ID } from "./mp.js";
@@ -52,7 +52,15 @@ ui.on("startGame", () => {
 });
 ui.on("leave", leaveToMenu);
 ui.on("joinSubmit", joinSubmit);
-ui.on("shopReady", () => {});
+ui.on("shopReady", () => {
+  if (!sim || !sim.shopOpen) return;
+  const me = sim.players.get(localId);
+  if (!me || me.state !== "alive") return;
+  const next = !me.ready;
+  if (mp?.isHost) setReady(sim, localId, next);
+  else if (mp) mp.sendReady(next);
+  else setReady(sim, localId, next);
+});
 ui.on("buy", (id) => {
   if (mp?.isHost) shopBuy(sim, localId, id);
   else if (mp) mp.sendBuy(id);
@@ -168,6 +176,10 @@ function setupMpHandlers() {
     const pid = peerIdToPlayerId.get(peerId);
     if (pid != null && sim) reloadPlayer(sim, pid);
   });
+  mp.on("peerReady", (peerId, ready) => {
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null && sim) setReady(sim, pid, ready);
+  });
   mp.on("peerLeft", (peerId) => {
     const pid = peerIdToPlayerId.get(peerId);
     if (pid != null && sim) removePlayer(sim, pid);
@@ -221,7 +233,7 @@ function serializeSimForNet(sim) {
       hp: p.hp, maxHp: p.maxHp, armor: p.armor,
       weapon: p.weapon, inventory: p.inventory, ammo: p.ammo,
       reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
-      cash: p.cash, lives: p.lives, alive: p.alive,
+      cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
       state: p.state, downedAt: p.downedAt, bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
       upgrades: p.upgrades,
       arsenalKills: [...p.arsenalKills],
@@ -328,6 +340,10 @@ function processEvents(sim) {
     } else if (e.type === "revive") {
       const p = sim.players.get(e.id);
       ui.pushKillFeed(`${p?.name ?? "—"} REVIVED`);
+    } else if (e.type === "buy") {
+      const p = sim.players.get(e.playerId);
+      ui.pushKillFeed(`${p?.name ?? "—"} bought ${e.itemName} · -$${e.cost}`);
+      ui.flashShopBuy?.(p?.name ?? "—", e.itemName);
     } else if (e.type === "wave-start") {
       ui.pushKillFeed(`WAVE ${e.wave} INCOMING`);
     } else if (e.type === "wave-end") {

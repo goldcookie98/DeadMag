@@ -167,6 +167,12 @@ button.primary:hover { background: rgba(255,46,108,0.08); box-shadow: 0 0 12px r
 .shop-card .desc { color: var(--dim); font-size: 11px; margin-top: 6px; line-height: 1.4; }
 #shop-cash { color: var(--neon-yellow); font-size: 18px; margin-bottom: 8px; }
 #shop-timer { color: var(--neon-yellow); }
+#shop-ready.active {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  background: rgba(0,255,209,0.08);
+  box-shadow: 0 0 12px rgba(0,255,209,0.4);
+}
 
 #hud {
   position: fixed; inset: 0;

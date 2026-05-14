@@ -57,6 +57,7 @@ export class Mp {
     const rEquip   = mk("equip");
     const rMode    = mk("mode");
     const rReload  = mk("reload");
+    const rReady   = mk("ready");
 
     rHello((data, peerId) => {
       this.peers.set(peerId, { name: data?.name || ("P_" + peerId.slice(0, 4)) });
@@ -103,6 +104,10 @@ export class Mp {
       if (this.isHost) this.handlers.peerReload?.(peerId);
     });
 
+    rReady((data, peerId) => {
+      if (this.isHost) this.handlers.peerReady?.(peerId, !!data?.ready);
+    });
+
     this.room.onPeerJoin((peerId) => {
       try { this._actions.hello({ name: this.myName }, peerId); } catch {}
     });
@@ -142,6 +147,7 @@ export class Mp {
   sendBuy(itemId)         { if (!this.isHost) this._actions.buy({ itemId }); }
   sendEquip(weapon)       { if (!this.isHost) this._actions.equip({ weapon }); }
   sendReload()            { if (!this.isHost) this._actions.reload({}); }
+  sendReady(ready)        { if (!this.isHost) this._actions.ready({ ready: !!ready }); }
 
   leave() {
     try { this.room?.leave(); } catch {}

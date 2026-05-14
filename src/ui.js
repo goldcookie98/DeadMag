@@ -159,6 +159,16 @@ export class UI {
     const ownedWeapons = Object.keys(player.inventory);
     const arsenal = ARSENAL_ORDER.filter((w) => ownedWeapons.includes(w));
 
+    if (sim) {
+      const alive = [...sim.players.values()].filter((p) => p.state === "alive");
+      const readyCount = alive.filter((p) => p.ready).length;
+      const isReady = !!player.ready;
+      this.el.shopReady.textContent = isReady
+        ? `READY · ${readyCount}/${alive.length} · CLICK TO UNREADY`
+        : `READY (${readyCount}/${alive.length}) · SKIP TIMER`;
+      this.el.shopReady.classList.toggle("active", isReady);
+    }
+
     this.el.shopGrid.innerHTML = "";
     for (const it of SHOP_ITEMS) {
       const can = it.canBuy(player, sim);
@@ -186,6 +196,22 @@ export class UI {
       card.addEventListener("click", () => this.handlers.equip?.(wid));
       this.el.shopGrid.appendChild(card);
     }
+  }
+
+  flashShopBuy(name, itemName) {
+    let host = document.getElementById("shop-buy-feed");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "shop-buy-feed";
+      host.style.cssText = "position:fixed;top:14%;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;z-index:11;font-family:ui-monospace,monospace;";
+      document.body.appendChild(host);
+    }
+    const row = document.createElement("div");
+    row.style.cssText = "background:rgba(0,255,209,0.12);border:1px solid #00ffd1;color:#00ffd1;padding:6px 12px;font-size:12px;letter-spacing:0.2em;text-shadow:0 0 6px #00ffd1;";
+    row.textContent = `${name} → ${itemName}`;
+    host.prepend(row);
+    setTimeout(() => row.remove(), 2500);
+    while (host.childElementCount > 4) host.lastChild.remove();
   }
 
   showGameOver({ title, win, stats }) {
