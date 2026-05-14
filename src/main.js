@@ -1,6 +1,6 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, CONSTANTS } from "./sim.js";
+import { createSim, addPlayer, removePlayer, setInput, step, shopBuy, switchWeapon, reloadPlayer, CONSTANTS } from "./sim.js";
 import { render } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, SELF_ID } from "./mp.js";
@@ -164,6 +164,10 @@ function setupMpHandlers() {
     const pid = peerIdToPlayerId.get(peerId);
     if (pid != null && sim) switchWeapon(sim, pid, data.weapon);
   });
+  mp.on("peerReload", (peerId) => {
+    const pid = peerIdToPlayerId.get(peerId);
+    if (pid != null && sim) reloadPlayer(sim, pid);
+  });
   mp.on("peerLeft", (peerId) => {
     const pid = peerIdToPlayerId.get(peerId);
     if (pid != null && sim) removePlayer(sim, pid);
@@ -264,6 +268,8 @@ function frame(now) {
       processEvents(sim);
       mp.broadcastState(serializeSimForNet(sim));
     } else {
+      if (snap.reload) mp.sendReload();
+      snap.reload = false;
       mp.sendInput(snap);
     }
 

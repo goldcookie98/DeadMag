@@ -56,6 +56,7 @@ export class Mp {
     const rBuy     = mk("buy");
     const rEquip   = mk("equip");
     const rMode    = mk("mode");
+    const rReload  = mk("reload");
 
     rHello((data, peerId) => {
       this.peers.set(peerId, { name: data?.name || ("P_" + peerId.slice(0, 4)) });
@@ -98,15 +99,19 @@ export class Mp {
       if (this.isHost) this.handlers.peerEquip?.(peerId, data);
     });
 
-    this.room.onPeerJoin(() => { /* hello arrives shortly */ });
+    rReload((_, peerId) => {
+      if (this.isHost) this.handlers.peerReload?.(peerId);
+    });
+
+    this.room.onPeerJoin((peerId) => {
+      try { this._actions.hello({ name: this.myName }, peerId); } catch {}
+    });
     this.room.onPeerLeave((peerId) => {
       this.peers.delete(peerId);
       this.handlers.peerLeft?.(peerId);
       this.handlers.peers?.();
       if (this.isHost) this._actions.lobby({ players: this.roster(), mode: this.lobbyMode });
     });
-
-    setTimeout(() => { try { this._actions.hello({ name: this.myName }); } catch {} }, 200);
   }
 
   roster() {
@@ -136,6 +141,7 @@ export class Mp {
   broadcastState(state)   { if (this.isHost) this._actions.state(state); }
   sendBuy(itemId)         { if (!this.isHost) this._actions.buy({ itemId }); }
   sendEquip(weapon)       { if (!this.isHost) this._actions.equip({ weapon }); }
+  sendReload()            { if (!this.isHost) this._actions.reload({}); }
 
   leave() {
     try { this.room?.leave(); } catch {}

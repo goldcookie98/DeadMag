@@ -555,4 +555,9 @@ export function switchWeapon(sim, playerId, weaponId) {
   p.reloadingUntil = 0;
 }
 
+export function reloadPlayer(sim, playerId) {
+  const p = sim.players.get(playerId);
+  if (p) startReload(sim, p);
+}
+
 export const CONSTANTS = { PLAYER_R, ZOMBIE_R, BULLET_R, MAP_W, MAP_H };
