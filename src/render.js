@@ -88,8 +88,7 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.save();
   ctx.translate(p.x, p.y);
   ctx.rotate(p.angle);
-  ctx.fillStyle = "#5a5a6e";
-  ctx.fillRect(r - 2, -3, 10, 6);
+  drawWeaponNotch(ctx, p.weapon, r);
   ctx.fillStyle = p.color || "#ff2e6c";
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -104,6 +103,80 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "center";
   ctx.fillText(p.name, p.x, p.y - r - 22);
+}
+
+function drawWeaponNotch(ctx, weapon, r) {
+  const base = "#3a3a48";
+  const metal = "#7a7a90";
+  const accent = "#b8b8c8";
+  ctx.lineCap = "butt";
+  switch (weapon) {
+    case "pistol":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 3, -2, 8, 4);
+      ctx.fillStyle = metal;
+      ctx.fillRect(r + 4, -2, 1, 4);
+      break;
+    case "shotgun":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 4, -4, 14, 8);
+      ctx.fillStyle = metal;
+      ctx.fillRect(r + 8, -4, 2, 8);
+      ctx.strokeStyle = "#1a1a26";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(r - 4, 0); ctx.lineTo(r + 9, 0);
+      ctx.stroke();
+      break;
+    case "smg":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 3, -2.5, 13, 5);
+      ctx.fillStyle = metal;
+      ctx.fillRect(r + 9, -2, 2, 4);
+      ctx.fillStyle = "#1a1a26";
+      ctx.fillRect(r - 1, 2.5, 4, 4);
+      break;
+    case "sniper":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 3, -2, 20, 4);
+      ctx.fillStyle = metal;
+      ctx.fillRect(r + 16, -2, 2, 4);
+      ctx.fillStyle = accent;
+      ctx.fillRect(r + 2, -5, 6, 3);
+      break;
+    case "rocket":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 4, -5, 12, 10);
+      ctx.fillStyle = "#ff2e6c";
+      ctx.beginPath();
+      ctx.moveTo(r + 8, -5);
+      ctx.lineTo(r + 14, 0);
+      ctx.lineTo(r + 8, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#ffd400";
+      ctx.fillRect(r + 9, -1, 4, 2);
+      break;
+    case "knife":
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 2, -1.5, 4, 3);
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.moveTo(r + 2, -2);
+      ctx.lineTo(r + 12, 0);
+      ctx.lineTo(r + 2, 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(r + 2, 0); ctx.lineTo(r + 11, 0);
+      ctx.stroke();
+      break;
+    default:
+      ctx.fillStyle = base;
+      ctx.fillRect(r - 2, -3, 10, 6);
+  }
 }
 
 function drawDownedPlayer(ctx, p, isLocal, timeMs) {
