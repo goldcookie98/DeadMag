@@ -105,7 +105,8 @@ export function setInput(sim, id, input) {
 }
 
 function moveSpeedFor(p) {
-  return BASE_SPEED + p.upgrades.speed * 35;
+  const base = BASE_SPEED + p.upgrades.speed * 35;
+  return p.weapon === "knife" ? base * 1.5 : base;
 }
 function dmgMulFor(p)  { return 1 + p.upgrades.dmg  * 0.15; }
 function rateMulFor(p) { return 1 - p.upgrades.rate * 0.10; }
@@ -355,7 +356,7 @@ export function shopRevive(sim, playerId) {
 function onZombieDeath(sim, z, killer) {
   sim.zombies = sim.zombies.filter((zz) => zz !== z);
   if (killer) {
-    killer.cash += 10;
+    killer.cash += 20;
     killer.score += 1;
     sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon });
   }
