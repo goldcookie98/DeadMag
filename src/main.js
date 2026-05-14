@@ -127,8 +127,18 @@ async function joinSubmit(code) {
     setupMpHandlers();
     await mp.join(code, myName);
     roomCode = code;
-    ui.setNetStatus("SEARCHING FOR HOST…");
-    await mp.waitForPeer(8000);
+    const totalMs = 25000;
+    const start = performance.now();
+    const tick = setInterval(() => {
+      const elapsed = performance.now() - start;
+      const s = Math.max(0, Math.ceil((totalMs - elapsed) / 1000));
+      ui.setNetStatus(`SEARCHING FOR HOST… ${s}s`);
+    }, 250);
+    try {
+      await mp.waitForPeer(totalMs);
+    } finally {
+      clearInterval(tick);
+    }
     isHost = false;
     state = "lobby";
     lobby = { players: mp.roster(), mode: mp.lobbyMode, hostId: null };
@@ -136,7 +146,7 @@ async function joinSubmit(code) {
     ui.setNetStatus("ONLINE · P2P");
   } catch (e) {
     const msg = (e?.message === "ROOM NOT FOUND")
-      ? `No host found for room ${code}. Double-check the code (host must have the lobby open).`
+      ? `No host found for room ${code} after 25s. Double-check the code (host must have the lobby open) or try again — the public relays can be slow on first connect.`
       : "Couldn't join: " + (e?.message ?? e);
     alert(msg);
     leaveToMenu();
