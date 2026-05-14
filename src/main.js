@@ -25,6 +25,13 @@ let isHost = false;
 let lobby = { players: [], mode: "horde" };
 let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 
+// Snapshot interpolation: keep recent server states + wall-clock receive times.
+// We render the world at (now - RENDER_DELAY_MS), lerping between the bracketing pair,
+// so the 30Hz server tick stops feeling like 30Hz.
+const RENDER_DELAY_MS = 80;
+const STATE_BUFFER_MAX_MS = 600;
+let stateBuffer = [];
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.floor(window.innerWidth * dpr);
@@ -192,10 +199,17 @@ function setupMpHandlers() {
     localId = mp.localPlayerId;
     state = "playing";
     sim = createSim(mode);
+    stateBuffer = [];
     ui.showOnly();
   });
   mp.on("state", (data) => {
-    sim = inflateState(data);
+    const inflated = inflateState(data);
+    const nowMs = performance.now();
+    stateBuffer.push({ receivedAt: nowMs, state: inflated });
+    while (stateBuffer.length > 2 && nowMs - stateBuffer[0].receivedAt > STATE_BUFFER_MAX_MS) {
+      stateBuffer.shift();
+    }
+    sim = inflated;
     if (sim.events?.length) processEvents(sim);
   });
   mp.on("peerLeft", () => {
@@ -212,6 +226,57 @@ function inflateState(s) {
   s.players = new Map(s.players.map((p) => [p.id, { ...p, arsenalKills: new Set(p.arsenalKills || []) }]));
   s.inputs = new Map();
   return s;
+}
+
+function buildRenderSim() {
+  if (!stateBuffer.length) return sim;
+  if (stateBuffer.length === 1) return stateBuffer[0].state;
+  const target = performance.now() - RENDER_DELAY_MS;
+  let prevIdx = -1;
+  for (let i = stateBuffer.length - 1; i >= 0; i--) {
+    if (stateBuffer[i].receivedAt <= target) { prevIdx = i; break; }
+  }
+  if (prevIdx < 0) return stateBuffer[0].state;
+  if (prevIdx >= stateBuffer.length - 1) return stateBuffer[stateBuffer.length - 1].state;
+  const a = stateBuffer[prevIdx], b = stateBuffer[prevIdx + 1];
+  const span = Math.max(1, b.receivedAt - a.receivedAt);
+  const t = Math.max(0, Math.min(1, (target - a.receivedAt) / span));
+  return interpolateStates(a.state, b.state, t);
+}
+
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
+function interpolateStates(a, b, t) {
+  const lerpedPlayers = new Map();
+  for (const [id, pb] of b.players) {
+    const pa = a.players.get(id);
+    if (pa) {
+      lerpedPlayers.set(id, {
+        ...pb,
+        x: pa.x + (pb.x - pa.x) * t,
+        y: pa.y + (pb.y - pa.y) * t,
+        angle: lerpAngle(pa.angle, pb.angle, t),
+      });
+    } else {
+      lerpedPlayers.set(id, pb);
+    }
+  }
+  const aZom = new Map(a.zombies.map((z) => [z.id, z]));
+  const zombies = b.zombies.map((z) => {
+    const za = aZom.get(z.id);
+    return za ? { ...z, x: za.x + (z.x - za.x) * t, y: za.y + (z.y - za.y) * t } : z;
+  });
+  const aBul = new Map(a.bullets.map((bu) => [bu.id, bu]));
+  const bullets = b.bullets.map((bu) => {
+    const ba = aBul.get(bu.id);
+    return ba ? { ...bu, x: ba.x + (bu.x - ba.x) * t, y: ba.y + (bu.y - ba.y) * t } : bu;
+  });
+  return { ...b, players: lerpedPlayers, zombies, bullets };
 }
 
 function renderLobby() {
@@ -247,10 +312,11 @@ function frame(now) {
       mp.sendInput(snap);
     }
 
-    const me = sim.players.get(localId);
-    if (me) camera.follow(me.x, me.y);
+    const renderSim = mp ? buildRenderSim() : sim;
+    const meRender = renderSim.players.get(localId);
+    if (meRender) camera.follow(meRender.x, meRender.y);
 
-    render(ctx, sim, camera, localId, input.mouse);
+    render(ctx, renderSim, camera, localId, input.mouse);
 
     if (sim.shopOpen) {
       if (ui.el.shop.classList.contains("hidden")) ui.showOnly("shop");
