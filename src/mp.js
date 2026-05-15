@@ -69,7 +69,11 @@ const ST = Object.freeze({
 
 const HANDSHAKE_TOTAL_MS = 90_000;
 const PING_INTERVAL_MS = 10_000;
-const PONG_TIMEOUT_MS = 30_000;
+// Pong timeout is only used to decide when the SIGNALING channel is dead.
+// Once DataChannels are up, signaling doesn't carry gameplay, so a stale
+// pong shouldn't end the match — but we still want to surface "server
+// went away" while sitting in the lobby. 60s is forgiving of flaky links.
+const PONG_TIMEOUT_MS = 60_000;
 
 export class Mp {
   constructor() {
@@ -164,10 +168,25 @@ export class Mp {
       ws.onclose = () => {
         const wasReady = this.state === ST.READY;
         const wasMidHandshake = this.state === ST.CONNECTING || this.state === ST.HANDSHAKING;
-        this._teardown();
-        this.state = ST.CLOSED;
-        if (wasMidHandshake) this._fail("connection closed before server replied");
-        if (wasReady) this._emit("disconnected", "signaling lost");
+        // Don't kill DCs just because signaling died — once WebRTC links are
+        // up they don't need the WS to keep flowing. Only fail/disconnect if
+        // we were mid-handshake (no fallback) or no peer link survived.
+        this._teardownSignaling();
+        if (wasMidHandshake) {
+          this.state = ST.CLOSED;
+          this._fail("connection closed before server replied");
+          return;
+        }
+        if (wasReady) {
+          let anyOpen = false;
+          for (const [, l] of this.peerLinks) if (l.isOpen()) { anyOpen = true; break; }
+          if (anyOpen) {
+            log("WS closed mid-game; DCs alive, game continues");
+          } else {
+            this.state = ST.CLOSED;
+            this._emit("disconnected", "signaling lost (no peers)");
+          }
+        }
       };
 
       ws.onmessage = (ev) => {
@@ -333,11 +352,12 @@ export class Mp {
     if (reject) reject(new Error(reason));
   }
 
-  _teardown() {
+  // Tear down WS only. Leaves peer links alone so gameplay over DCs can
+  // continue even after signaling drops. Called on heartbeat loss and on
+  // mid-game WS close.
+  _teardownSignaling() {
     if (this._handshakeDeadline) { clearTimeout(this._handshakeDeadline); this._handshakeDeadline = null; }
     if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
-    for (const [, link] of this.peerLinks) { try { link.close(); } catch {} }
-    this.peerLinks.clear();
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onerror = null;
@@ -346,6 +366,13 @@ export class Mp {
       this.ws = null;
       try { w.close(); } catch {}
     }
+  }
+
+  // Full teardown: WS + every peer link. Used on `leave()` and on hard fail.
+  _teardown() {
+    this._teardownSignaling();
+    for (const [, link] of this.peerLinks) { try { link.close(); } catch {} }
+    this.peerLinks.clear();
   }
 
   waitForPeer(timeoutMs) {

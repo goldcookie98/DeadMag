@@ -63,8 +63,16 @@ let predictMe = null;          // { x, y, angle } — local player's predicted p
 let _lastInputSendAt = 0;
 let _lastSentShoot = false;
 let _lastSentReload = false;
-let _lastLocalFireAt = 0;      // gates client-side muzzle flash to weapon rate
+let _lastLocalFireAt = 0;      // gates client-side muzzle flash + ghost bullets to weapon rate
 let _lastBroadcastAt = 0;
+
+// Client-side predicted bullets. Spawned at our predicted muzzle on every
+// local fire-cycle, advanced at the weapon's projectile speed, dropped on
+// walls / map edges / TTL. Cosmetic only — host's sim is authoritative for
+// actual hits. Lives long enough (~250ms) to bridge to when the host's
+// real bullet enters the snapshot stream so the shot feels instant.
+const GHOST_BULLET_TTL_MS = 250;
+let ghostBullets = [];
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -246,6 +254,7 @@ function setupMpHandlers() {
     _lastSentReload = false;
     _lastLocalFireAt = 0;
     _lastBroadcastAt = 0;
+    ghostBullets = [];
     if (mp.isHost) {
       // Host runs the authoritative sim locally. Seed it with every peer
       // from the lobby, keyed by their server-issued IDs so all clients
@@ -372,6 +381,7 @@ function leaveToMenu() {
   mp = null; sim = null; roomCode = null;
   predictMe = null;
   stateBuffer = [];
+  ghostBullets = [];
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
@@ -410,6 +420,52 @@ function advancePredict(dt, snap, me) {
   predictMe.x = Math.max(PREDICT_PLAYER_R, Math.min(MAP_W - PREDICT_PLAYER_R, nx));
   predictMe.y = Math.max(PREDICT_PLAYER_R, Math.min(MAP_H - PREDICT_PLAYER_R, ny));
   predictMe.angle = Math.atan2(snap.aimY - predictMe.y, snap.aimX - predictMe.x);
+}
+
+// Fire a client-side muzzle flash + predicted bullets if our local cooldown
+// is ready. Called every frame `snap.shoot` is true so autofire feels
+// continuous instead of only flashing on the click-edge. Returns true if
+// we fired this frame (used by the caller to update bookkeeping).
+function tryLocalFire(snap, meAuth, nowSend) {
+  if (!predictMe || meAuth.state !== "alive") return false;
+  const w = WEAPONS[meAuth.weapon];
+  if (!w || w.kind === "melee") return false;
+  const cooldownMs = w.rate ?? 100;
+  const ready = nowSend - _lastLocalFireAt >= cooldownMs * 0.9
+    && meAuth.ammo > 0
+    && (sim.timeMs ?? 0) >= (meAuth.reloadingUntil ?? 0);
+  if (!ready) return false;
+  const baseAng = Math.atan2(snap.aimY - predictMe.y, snap.aimX - predictMe.x);
+  recordMuzzleFlash(predictMe.x, predictMe.y, baseAng, meAuth.weapon, nowSend);
+  const pellets = w.pellets || 1;
+  for (let i = 0; i < pellets; i++) {
+    const angle = baseAng + (Math.random() - 0.5) * w.spread * 2;
+    ghostBullets.push({
+      x: predictMe.x + Math.cos(angle) * 18,
+      y: predictMe.y + Math.sin(angle) * 18,
+      vx: Math.cos(angle) * w.proj,
+      vy: Math.sin(angle) * w.proj,
+      weapon: meAuth.weapon,
+      bornAt: nowSend,
+    });
+  }
+  _lastLocalFireAt = nowSend;
+  return true;
+}
+
+function advanceGhostBullets(dt, nowMs) {
+  if (ghostBullets.length === 0) return;
+  const next = [];
+  for (const b of ghostBullets) {
+    if (nowMs - b.bornAt > GHOST_BULLET_TTL_MS) continue;
+    const nx = b.x + b.vx * dt;
+    const ny = b.y + b.vy * dt;
+    if (nx < 0 || nx > MAP_W || ny < 0 || ny > MAP_H) continue;
+    if (predictCollideWalls(nx, ny, 3)) continue;
+    b.x = nx; b.y = ny;
+    next.push(b);
+  }
+  ghostBullets = next;
 }
 
 // Per-frame reconciliation that doesn't fight the player's input. While an
@@ -484,18 +540,12 @@ function frame(now) {
       if (meAuth) {
         reconcilePerFrame(snap, meAuth);
         if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
-        if (shootEdge && predictMe && meAuth.state === "alive") {
-          const w = WEAPONS[meAuth.weapon];
-          const cooldownMs = w?.rate ?? 100;
-          const ready = nowSend - _lastLocalFireAt >= cooldownMs * 0.9
-            && meAuth.ammo > 0
-            && (sim.timeMs ?? 0) >= (meAuth.reloadingUntil ?? 0);
-          if (ready) {
-            recordMuzzleFlash(predictMe.x, predictMe.y, predictMe.angle, meAuth.weapon, nowSend);
-            _lastLocalFireAt = nowSend;
-          }
-        }
+        // Local fire prediction. Fire on every frame the trigger is held
+        // (cooldown gates to the weapon's rate), so autofire feels alive
+        // instead of only flashing on the click-edge.
+        if (snap.shoot) tryLocalFire(snap, meAuth, nowSend);
       }
+      advanceGhostBullets(dt, nowSend);
     }
 
     // Host renders straight from its live sim (zero RTT to itself, no need
@@ -510,6 +560,12 @@ function frame(now) {
         players.set(localId, { ...me, x: predictMe.x, y: predictMe.y, angle: predictMe.angle });
         renderSim = { ...renderSim, players };
       }
+    }
+    if (guesting && ghostBullets.length > 0) {
+      // Splice predicted bullets in so they render alongside authoritative
+      // ones. Guests will briefly see both during the ~RTT-bridge window;
+      // that's preferable to the click feeling dead.
+      renderSim = { ...renderSim, bullets: [...renderSim.bullets, ...ghostBullets] };
     }
     const meRender = renderSim.players.get(localId);
     if (meRender) camera.follow(meRender.x, meRender.y);
