@@ -1,14 +1,26 @@
-// WebSocket multiplayer client. Talks to server/index.js (authoritative sim).
-// Same external API as the old P2P Mp class so main.js doesn't have to change much.
+// Multiplayer client. The signaling server (server/index.js) only does
+// matchmaking + WebRTC SDP/ICE relay. All gameplay traffic — inputs from
+// guests, snapshots from host, shop/equip/ready — rides DataChannels.
 //
-// Structural notes (2026-05): the previous design had two racing timeouts —
-// a 60s ws.open timer plus a 6/8s welcome-reply timer — which interacted badly
-// with Render free-tier cold starts. It also never nulled `this.ws` on close,
-// so retries silently no-op'd, and it had no heartbeat so dead connections
-// went unnoticed. This is a single state machine: idle → connecting →
-// handshaking → ready → closed, with one unified budget covering the whole
-// connect-and-handshake flow, a ping/pong keepalive, and a clean shutdown
-// path that surfaces a `disconnected` event so the UI can recover.
+// Topology: star, host-centred. The first joiner is host and runs the
+// authoritative sim in main.js. Guests connect only to the host. Host
+// connects to every guest. If the host disappears, the next-in-line
+// becomes host (server re-elects), but for v1 we just disconnect — the
+// game ends cleanly rather than trying to migrate live state.
+//
+// External API (preserved from the WS-only version so main.js doesn't
+// have to know which transport is which):
+//   create(name), join(code, name), leave()
+//   setMode(mode), startGame(mode)
+//   sendInput(input), sendBuy(itemId), sendEquip(weapon), sendReady(ready)
+//   broadcastState(state)   ← host calls each tick with serialized sim
+//   roster(), peers, waitForPeer(timeoutMs)
+// Events emitted: connecting, peers, modeChanged, start, state, input,
+//   peerAction, disconnected, serverError.
+// New events vs the old version: `input` and `peerAction` fire on the host
+// when a guest's DC delivers one — main.js wires those into the sim.
+
+import { PeerLink } from "./p2p.js";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", ""]);
 function isLocalHost() { return LOCAL_HOSTS.has(location.hostname); }
@@ -55,12 +67,7 @@ const ST = Object.freeze({
   CLOSED: "closed",
 });
 
-// Single budget covering "open TCP/WS" + "server replies with welcome".
-// Render free-tier cold starts can take 30–60s; give the whole flow 90s.
 const HANDSHAKE_TOTAL_MS = 90_000;
-// Heartbeat: send a ping every 10s, treat the connection as dead if we
-// haven't seen a pong in 30s. Catches silent half-open connections that
-// browsers don't always surface as `onclose`.
 const PING_INTERVAL_MS = 10_000;
 const PONG_TIMEOUT_MS = 30_000;
 
@@ -74,7 +81,7 @@ export class Mp {
     this.lobbyMode = "horde";
     this.localPlayerId = null;
     this.hostPlayerId = null;
-    this.serverPlayers = [];        // [{ id, name }]
+    this.serverPlayers = [];          // [{ id, name }] from signaling lobby
     this.handlers = {};
     this._handshakeResolve = null;
     this._handshakeReject = null;
@@ -82,6 +89,9 @@ export class Mp {
     this._pingInterval = null;
     this._lastPongAt = 0;
     this._firstPeerResolvers = [];
+    // WebRTC links keyed by remote peerId. Host has one per guest; guest has
+    // exactly one (against the host).
+    this.peerLinks = new Map();
   }
 
   on(ev, fn) { this.handlers[ev] = fn; }
@@ -107,9 +117,6 @@ export class Mp {
     return this._connectAndHandshake({ type: "join", code: upper, name });
   }
 
-  // Single flow: open WS, send create/join, wait for welcome, all under one budget.
-  // Resolves with the room code on welcome; rejects with a human-readable reason
-  // on any failure mode (cold-start timeout, server-side error, mid-handshake drop).
   _connectAndHandshake(intent) {
     if (this.state !== ST.IDLE && this.state !== ST.CLOSED) {
       return Promise.reject(new Error("Already connecting"));
@@ -117,11 +124,9 @@ export class Mp {
     const url = getSavedServerUrl();
     if (!url) {
       return Promise.reject(new Error(
-        "No DeadMag server configured. Click SERVER on the menu and paste a URL " +
-        "(e.g. wss://deadmag-server.onrender.com)."
+        "No DeadMag server configured. Click SERVER on the menu and paste a URL."
       ));
     }
-    // Reset any leftover state from a previous attempt.
     this._teardown();
     this.state = ST.CONNECTING;
     this._emit("connecting", url);
@@ -134,57 +139,45 @@ export class Mp {
       this._handshakeDeadline = setTimeout(() => {
         if (this.state === ST.READY) return;
         const stage = this.state === ST.CONNECTING ? "open" : "handshake";
-        this._fail(
-          stage === "open"
-            ? "couldn't reach server at " + url + " (free hosts can cold-start; try again)"
-            : "server didn't reply in time — try again"
-        );
+        this._fail(stage === "open"
+          ? "couldn't reach server at " + url + " (free hosts can cold-start; try again)"
+          : "server didn't reply in time — try again");
       }, HANDSHAKE_TOTAL_MS);
 
       let ws;
       try { ws = new WebSocket(url); }
-      catch (e) {
-        this._fail("invalid server URL: " + url);
-        return;
-      }
+      catch { this._fail("invalid server URL: " + url); return; }
       this.ws = ws;
 
       ws.onopen = () => {
         if (this.state !== ST.CONNECTING) return;
         this.state = ST.HANDSHAKING;
-        log("ws open, sending", intent.type);
         if (intent.type === "create") this._send("create", { name: intent.name });
         else this._send("join", { code: intent.code, name: intent.name });
       };
 
-      ws.onerror = (e) => {
-        log("ws error", e?.message || "");
+      ws.onerror = () => {
         if (this.state === ST.READY) return;
         this._fail("couldn't reach server at " + url);
       };
 
       ws.onclose = () => {
-        log("ws close (state=" + this.state + ")");
         const wasReady = this.state === ST.READY;
         const wasMidHandshake = this.state === ST.CONNECTING || this.state === ST.HANDSHAKING;
         this._teardown();
         this.state = ST.CLOSED;
-        if (wasMidHandshake) {
-          this._fail("connection closed before server replied");
-        }
-        if (wasReady) {
-          this._emit("disconnected", "connection lost");
-        }
+        if (wasMidHandshake) this._fail("connection closed before server replied");
+        if (wasReady) this._emit("disconnected", "signaling lost");
       };
 
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch { return; }
-        this._onMessage(m);
+        this._onSignalingMessage(m);
       };
     });
   }
 
-  _onMessage(m) {
+  _onSignalingMessage(m) {
     if (m.type === "welcome") {
       this.code = m.code;
       this.localPlayerId = m.playerId;
@@ -195,13 +188,14 @@ export class Mp {
       this.isHost = this.localPlayerId === this.hostPlayerId;
       this.state = ST.READY;
       this._startHeartbeat();
-      // Resolve handshake BEFORE emitting peers, so any synchronous lobby
-      // render reads from a fully-populated mp.
       if (this._handshakeDeadline) { clearTimeout(this._handshakeDeadline); this._handshakeDeadline = null; }
       const resolve = this._handshakeResolve;
       this._handshakeResolve = null;
       this._handshakeReject = null;
       if (resolve) resolve(this.code);
+      // Guests open a PeerLink to the host immediately so the data channel
+      // is ready by the time the host hits "start".
+      if (!this.isHost && this.hostPlayerId != null) this._ensureLinkToHost();
       this._emit("peers");
       if (this.serverPlayers.length > 1) this._resolveFirstPeer();
     } else if (m.type === "pong") {
@@ -212,12 +206,41 @@ export class Mp {
       this.hostPlayerId = m.hostId;
       this.serverPlayers = m.players || [];
       this.isHost = this.localPlayerId === this.hostPlayerId;
+      // Drop links for peers that have left.
+      const currentIds = new Set(this.serverPlayers.map((p) => p.id));
+      for (const [pid, link] of [...this.peerLinks]) {
+        if (!currentIds.has(pid) || pid === this.localPlayerId) {
+          link.close();
+          this.peerLinks.delete(pid);
+        }
+      }
+      // Guests: if host changed, dial the new host.
+      if (!this.isHost && this.hostPlayerId != null && !this.peerLinks.has(this.hostPlayerId)) {
+        this._ensureLinkToHost();
+      }
       this._emit("peers");
       this._emit("modeChanged");
       if (this.serverPlayers.length > 1) this._resolveFirstPeer();
+    } else if (m.type === "peerJoined") {
+      // Host receives this when a new guest joins. Host is the offerer.
+      if (this.isHost && m.peer && m.peer.id !== this.localPlayerId) {
+        this._openLink(m.peer.id, /*isOfferer*/ true);
+      }
+    } else if (m.type === "peerLeft") {
+      const link = this.peerLinks.get(m.peerId);
+      if (link) { link.close(); this.peerLinks.delete(m.peerId); }
+      // If the host left and we're a guest, the game can't continue.
+      if (!this.isHost && m.peerId === this.hostPlayerId) {
+        this._emit("disconnected", "host left");
+      }
+    } else if (m.type === "signal") {
+      const fromId = m.from;
+      let link = this.peerLinks.get(fromId);
+      // If we have no link yet, the other side is offering; we answer.
+      if (!link) link = this._openLink(fromId, /*isOfferer*/ false);
+      link.handleSignal(m.data);
     } else if (m.type === "error") {
       const msg = m.message || "server error";
-      log("server error:", msg);
       if (this.state === ST.HANDSHAKING || this.state === ST.CONNECTING) {
         const userMsg = /room not found/i.test(msg) ? "ROOM NOT FOUND" : msg;
         this._fail(userMsg);
@@ -226,12 +249,52 @@ export class Mp {
       }
     } else if (m.type === "start") {
       this._emit("start", { mode: m.mode, mapping: this._identityMapping() });
-    } else if (m.type === "state") {
-      if (typeof window !== "undefined") {
-        try { window.__lastState = structuredClone(m.state); }
-        catch { window.__lastState = JSON.parse(JSON.stringify(m.state)); }
-      }
-      this._emit("state", m.state);
+    }
+  }
+
+  _ensureLinkToHost() {
+    if (this.isHost || this.hostPlayerId == null) return;
+    if (this.peerLinks.has(this.hostPlayerId)) return;
+    // Guest is the answerer; the host will send the offer once it knows we exist.
+    this._openLink(this.hostPlayerId, /*isOfferer*/ false);
+  }
+
+  _openLink(peerId, isOfferer) {
+    if (this.peerLinks.has(peerId)) return this.peerLinks.get(peerId);
+    const link = new PeerLink({
+      peerId,
+      isOfferer,
+      onSignal: ({ to, kind, data }) => {
+        this._send("signal", { to, data: { kind, data } });
+      },
+      onOpen: () => {
+        log("DC open <-> peer", peerId);
+        this._emit("peers");
+      },
+      onMessage: (msg) => this._onDcMessage(peerId, msg),
+      onClose: (reason) => {
+        log("DC closed <-> peer", peerId, reason);
+        this.peerLinks.delete(peerId);
+        if (!this.isHost && peerId === this.hostPlayerId && this.state === ST.READY) {
+          this._emit("disconnected", "host disconnected");
+        }
+      },
+    });
+    this.peerLinks.set(peerId, link);
+    return link;
+  }
+
+  _onDcMessage(fromId, msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "state") {
+      // Guests render-by-snapshot. Host shouldn't normally receive these.
+      this._emit("state", msg.state);
+    } else if (msg.type === "input") {
+      // Host receives a guest's per-frame input.
+      this._emit("input", { fromId, input: msg.input });
+    } else if (msg.type === "buy" || msg.type === "equip" || msg.type === "ready") {
+      // Host receives a guest's lobby/shop action.
+      this._emit("peerAction", { fromId, action: msg });
     }
   }
 
@@ -248,9 +311,7 @@ export class Mp {
     this._pingInterval = setInterval(() => {
       if (!this.ws || this.ws.readyState !== 1) return;
       if (performance.now() - this._lastPongAt > PONG_TIMEOUT_MS) {
-        log("heartbeat lost — closing");
-        // Don't emit disconnected here; the onclose handler will do it,
-        // and we want a single source of truth.
+        log("signaling heartbeat lost — closing");
         try { this.ws.close(); } catch {}
         return;
       }
@@ -263,7 +324,6 @@ export class Mp {
     for (const r of rs) r();
   }
 
-  // Reject the pending handshake (if any) and tear down. Safe to call repeatedly.
   _fail(reason) {
     const reject = this._handshakeReject;
     this._handshakeResolve = null;
@@ -273,14 +333,12 @@ export class Mp {
     if (reject) reject(new Error(reason));
   }
 
-  // Stop heartbeat + handshake deadline, close socket, but DON'T touch
-  // identity state (code/localPlayerId/etc) — callers may still need it
-  // briefly for the disconnected event.
   _teardown() {
     if (this._handshakeDeadline) { clearTimeout(this._handshakeDeadline); this._handshakeDeadline = null; }
     if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
+    for (const [, link] of this.peerLinks) { try { link.close(); } catch {} }
+    this.peerLinks.clear();
     if (this.ws) {
-      // Detach handlers so a late close/error after we've moved on can't fire.
       this.ws.onopen = null;
       this.ws.onerror = null;
       this.ws.onmessage = null;
@@ -334,12 +392,37 @@ export class Mp {
     this._send("start", { mode: mode || this.lobbyMode });
   }
 
-  sendInput(input)  { this._send("input", { input }); }
-  sendBuy(itemId)   { this._send("buy", { itemId }); }
-  sendEquip(weapon) { this._send("equip", { weapon }); }
-  sendReady(ready)  { this._send("ready", { ready: !!ready }); }
+  // Guest → host over DC. Host calls these too but they no-op (host inputs
+  // its sim directly via setInput in main.js).
+  sendInput(input) {
+    if (this.isHost) return;
+    const host = this.peerLinks.get(this.hostPlayerId);
+    if (host) host.send({ type: "input", input });
+  }
+  sendBuy(itemId) {
+    if (this.isHost) return;
+    const host = this.peerLinks.get(this.hostPlayerId);
+    if (host) host.send({ type: "buy", itemId });
+  }
+  sendEquip(weapon) {
+    if (this.isHost) return;
+    const host = this.peerLinks.get(this.hostPlayerId);
+    if (host) host.send({ type: "equip", weapon });
+  }
+  sendReady(ready) {
+    if (this.isHost) return;
+    const host = this.peerLinks.get(this.hostPlayerId);
+    if (host) host.send({ type: "ready", ready: !!ready });
+  }
 
-  broadcastState(_state) { /* no-op: server broadcasts */ }
+  // Host → all guests. Called by main.js's frame loop at ~30Hz.
+  broadcastState(state) {
+    if (!this.isHost) return;
+    const msg = { type: "state", state };
+    for (const [, link] of this.peerLinks) {
+      if (link.isOpen()) link.send(msg);
+    }
+  }
 
   leave() {
     this._teardown();
@@ -349,7 +432,6 @@ export class Mp {
     this.localPlayerId = null;
     this.hostPlayerId = null;
     this.isHost = false;
-    // Drop any pending peer-wait so callers don't hang.
     const rs = this._firstPeerResolvers.splice(0);
     for (const r of rs) r();
   }

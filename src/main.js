@@ -1,6 +1,6 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
+import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady, serializeSim } from "./sim.js";
 import { render, recordMuzzleFlash } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
@@ -55,12 +55,16 @@ let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 // so the 30Hz server tick stops feeling like 30Hz.
 const RENDER_DELAY_MS = 100;
 const STATE_BUFFER_MAX_MS = 600;
+// Host broadcasts at 30Hz — matches the previous server tick rate, which is
+// what the guest's snapshot interpolation is tuned for.
+const HOST_BROADCAST_INTERVAL_MS = 33;
 let stateBuffer = [];
 let predictMe = null;          // { x, y, angle } — local player's predicted pose
 let _lastInputSendAt = 0;
 let _lastSentShoot = false;
 let _lastSentReload = false;
 let _lastLocalFireAt = 0;      // gates client-side muzzle flash to weapon rate
+let _lastBroadcastAt = 0;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -96,15 +100,17 @@ ui.on("shopReady", () => {
   const me = sim.players.get(localId);
   if (!me || me.state !== "alive") return;
   const next = !me.ready;
-  if (mp) mp.sendReady(next);
+  // Host owns the sim, so its own actions apply directly. Guests forward
+  // to the host over the DataChannel.
+  if (mp && !mp.isHost) mp.sendReady(next);
   else setReady(sim, localId, next);
 });
 ui.on("buy", (id) => {
-  if (mp) mp.sendBuy(id);
+  if (mp && !mp.isHost) mp.sendBuy(id);
   else if (sim) shopBuy(sim, localId, id);
 });
 ui.on("equip", (wid) => {
-  if (mp) mp.sendEquip(wid);
+  if (mp && !mp.isHost) mp.sendEquip(wid);
   else if (sim) switchWeapon(sim, localId, wid);
 });
 
@@ -239,9 +245,22 @@ function setupMpHandlers() {
     _lastSentShoot = false;
     _lastSentReload = false;
     _lastLocalFireAt = 0;
+    _lastBroadcastAt = 0;
+    if (mp.isHost) {
+      // Host runs the authoritative sim locally. Seed it with every peer
+      // from the lobby, keyed by their server-issued IDs so all clients
+      // refer to the same player records.
+      let i = 0;
+      for (const p of mp.serverPlayers) {
+        addPlayer(sim, p.name, COLORS[i % COLORS.length], false, p.id);
+        i++;
+      }
+    }
     ui.showOnly();
   });
   mp.on("state", (data) => {
+    // Host runs the sim locally and ignores its own broadcasts.
+    if (mp?.isHost) return;
     const inflated = inflateState(data);
     const nowMs = performance.now();
     stateBuffer.push({ receivedAt: nowMs, state: inflated });
@@ -250,6 +269,18 @@ function setupMpHandlers() {
     }
     sim = inflated;
     if (sim.events?.length) processEvents(sim);
+  });
+  // Guest → host inputs: feed them straight into the host's sim under the
+  // sender's player ID. setInput keyed by player ID matches how solo works.
+  mp.on("input", ({ fromId, input: peerInput }) => {
+    if (!mp?.isHost || !sim) return;
+    if (sim.players.get(fromId)) setInput(sim, fromId, peerInput);
+  });
+  mp.on("peerAction", ({ fromId, action }) => {
+    if (!mp?.isHost || !sim) return;
+    if (action.type === "buy") shopBuy(sim, fromId, action.itemId);
+    else if (action.type === "equip") switchWeapon(sim, fromId, action.weapon);
+    else if (action.type === "ready") setReady(sim, fromId, !!action.ready);
   });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
@@ -421,15 +452,25 @@ function frame(now) {
 
   if (state === "playing" && sim) {
     const snap = input.snapshot(camera);
-    if (!mp) {
+    const hosting = !!mp && mp.isHost;
+    const guesting = !!mp && !mp.isHost;
+    if (!mp || hosting) {
+      // Host (and solo) run the sim directly. Local input goes in via the
+      // normal path; peer inputs arrived on the "input" event handler.
       if (sim.players.get(localId)) setInput(sim, localId, snap);
       step(sim, dt);
       processEvents(sim);
-    } else {
+      if (hosting) {
+        const nowB = performance.now();
+        if (nowB - _lastBroadcastAt >= HOST_BROADCAST_INTERVAL_MS) {
+          mp.broadcastState(serializeSim(sim));
+          _lastBroadcastAt = nowB;
+        }
+      }
+    } else if (guesting) {
       const nowSend = performance.now();
-      // Bypass the 30Hz throttle on the FIRST frame an action becomes true
-      // (click, reload tap) — otherwise the server can wait up to a full
-      // tick before even seeing the input. Held actions keep the throttle.
+      // Bypass throttle on action-edges (click, reload tap) so the host
+      // sees the press before the next interval window.
       const shootEdge  = snap.shoot  && !_lastSentShoot;
       const reloadEdge = snap.reload && !_lastSentReload;
       const edge = shootEdge || reloadEdge;
@@ -443,8 +484,6 @@ function frame(now) {
       if (meAuth) {
         reconcilePerFrame(snap, meAuth);
         if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
-        // Client-side muzzle flash for instant click feedback. The actual hit
-        // is still server-authoritative; this just hides the round-trip floor.
         if (shootEdge && predictMe && meAuth.state === "alive") {
           const w = WEAPONS[meAuth.weapon];
           const cooldownMs = w?.rate ?? 100;
@@ -459,10 +498,12 @@ function frame(now) {
       }
     }
 
-    let renderSim = mp ? buildRenderSim() : sim;
-    // Override the local player with the predicted pose so movement is
-    // responsive to input instead of waiting on the server round-trip.
-    if (mp && predictMe) {
+    // Host renders straight from its live sim (zero RTT to itself, no need
+    // for snapshot interpolation or prediction). Guests render from the
+    // interpolated state buffer with the local player overridden by the
+    // predicted pose.
+    let renderSim = guesting ? buildRenderSim() : sim;
+    if (guesting && predictMe) {
       const me = renderSim.players.get(localId);
       if (me) {
         const players = new Map(renderSim.players);

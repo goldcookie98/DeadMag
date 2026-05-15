@@ -86,13 +86,58 @@ export function createSim(mode = "horde") {
   };
 }
 
-export function addPlayer(sim, name, color, isBot = false) {
+export function addPlayer(sim, name, color, isBot = false, forcedId = null) {
   const p = makePlayer(name, color, isBot);
+  if (forcedId != null) p.id = forcedId;
   sim.players.set(p.id, p);
   if (sim.mode === "horde" && !sim.waveActive && sim.wave === 0) {
     sim.nextWaveAt = sim.timeMs + 2000;
   }
   return p;
+}
+
+// Wire-format snapshot for transmission over DataChannels. Maps/Sets aren't
+// JSON-serializable, so we flatten to arrays here; the client re-inflates.
+// `_bot` is host-only AI state and is stripped (guests don't run AI).
+export function serializeSim(sim) {
+  const players = [];
+  for (const [, p] of sim.players) {
+    players.push({
+      id: p.id,
+      name: p.name, color: p.color, isBot: p.isBot,
+      x: p.x, y: p.y, vx: p.vx, vy: p.vy, angle: p.angle,
+      hp: p.hp, maxHp: p.maxHp, armor: p.armor,
+      weapon: p.weapon, inventory: p.inventory,
+      ammo: p.ammo, reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
+      lastShotAt: p.lastShotAt,
+      cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
+      state: p.state, deathAt: p.deathAt, downedAt: p.downedAt,
+      bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
+      upgrades: p.upgrades,
+      arsenalKills: [...p.arsenalKills],
+      score: p.score,
+    });
+  }
+  return {
+    mode: sim.mode,
+    tick: sim.tick,
+    timeMs: sim.timeMs,
+    players,
+    zombies: sim.zombies,
+    bullets: sim.bullets,
+    explosions: sim.explosions,
+    pickups: sim.pickups,
+    wave: sim.wave,
+    waveActive: sim.waveActive,
+    nextWaveAt: sim.nextWaveAt,
+    zombiesToSpawn: sim.zombiesToSpawn,
+    zombieSpawnAt: sim.zombieSpawnAt,
+    shopOpenUntil: sim.shopOpenUntil,
+    shopOpen: sim.shopOpen,
+    gameOver: sim.gameOver,
+    winnerId: sim.winnerId,
+    events: sim.events,
+  };
 }
 
 export function removePlayer(sim, id) {
