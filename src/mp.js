@@ -289,6 +289,7 @@ export class Mp {
       onOpen: () => {
         log("DC open <-> peer", peerId);
         this._emit("peers");
+        this._emit("dcOpen", peerId);
       },
       onMessage: (msg) => this._onDcMessage(peerId, msg),
       onClose: (reason) => {

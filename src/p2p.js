@@ -13,11 +13,33 @@
 //
 // Lifecycle: connecting → open → closed. `close()` is idempotent.
 
+// STUN alone gets us through cone NAT (most home routers). For symmetric NAT
+// or restrictive corporate firewalls we need TURN as a relay fallback —
+// without it those peers see "connection failed" and the DC never opens.
+// openrelay's free TURN endpoint covers UDP, TCP (firewall-friendly), and
+// TLS-over-443 (the most-allowed path). Free → unreliable; consider running
+// our own coturn if this becomes load-bearing.
 const ICE_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443?transport=tcp",
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
   ],
+  iceCandidatePoolSize: 4,
 };
 
 const CHANNEL_LABEL = "game";
@@ -40,9 +62,16 @@ export class PeerLink {
       if (!ev.candidate) return;
       this.onSignal({ to: this.peerId, kind: "ice", data: ev.candidate.toJSON() });
     };
+    this.pc.oniceconnectionstatechange = () => {
+      console.log("[p2p] peer", this.peerId, "ice:", this.pc.iceConnectionState);
+    };
     this.pc.onconnectionstatechange = () => {
       const s = this.pc.connectionState;
-      if (s === "failed" || s === "closed" || s === "disconnected") this._handleClose("pc-" + s);
+      console.log("[p2p] peer", this.peerId, "pc:", s);
+      // "disconnected" is transient — ICE can drop and recover. Only tear
+      // down on terminal states; let "disconnected" linger and either heal
+      // back to "connected" or escalate to "failed".
+      if (s === "failed" || s === "closed") this._handleClose("pc-" + s);
     };
     this.pc.ondatachannel = (ev) => {
       // Answerer path: host's offer created the channel; we just adopt it.

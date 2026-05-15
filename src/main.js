@@ -264,6 +264,12 @@ function setupMpHandlers() {
         addPlayer(sim, p.name, COLORS[i % COLORS.length], false, p.id);
         i++;
       }
+      ui.setNetStatus("HOSTING");
+    } else {
+      // Guests stare at an empty map until the host's first state snapshot
+      // arrives over the DC. Surface that state so they don't think it broke.
+      const hostLink = mp.peerLinks?.get(mp.hostPlayerId);
+      ui.setNetStatus(hostLink?.isOpen() ? "ONLINE · P2P" : "ESTABLISHING P2P…");
     }
     ui.showOnly();
   });
@@ -290,6 +296,11 @@ function setupMpHandlers() {
     if (action.type === "buy") shopBuy(sim, fromId, action.itemId);
     else if (action.type === "equip") switchWeapon(sim, fromId, action.weapon);
     else if (action.type === "ready") setReady(sim, fromId, !!action.ready);
+  });
+  mp.on("dcOpen", (peerId) => {
+    // Guest: surface the host-link as ONLINE once the DC actually opens,
+    // so they know they're not staring at an empty map for no reason.
+    if (!mp.isHost && peerId === mp.hostPlayerId) ui.setNetStatus("ONLINE · P2P");
   });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
