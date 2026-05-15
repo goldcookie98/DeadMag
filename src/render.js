@@ -143,7 +143,6 @@ function drawWalls(ctx) {
 
 function drawPlayer(ctx, p, isLocal) {
   const r = CONSTANTS.PLAYER_R;
-  if (isLocal) drawAimCone(ctx, p);
 
   ctx.save();
   ctx.translate(p.x, p.y);
@@ -166,24 +165,6 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.font = "bold 12px Anton, Impact, sans-serif";
   ctx.textAlign = "center";
   ctx.fillText(p.name, p.x, p.y - r - 22);
-}
-
-function drawAimCone(ctx, p) {
-  const len = 140, half = 54;
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  ctx.rotate(p.angle);
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(len, -half);
-  ctx.lineTo(len, half);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(46,255,229,0.10)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(46,255,229,0.45)";
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-  ctx.restore();
 }
 
 function drawWeaponNotch(ctx, weapon, r) {
