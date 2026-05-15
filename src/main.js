@@ -74,6 +74,15 @@ let _lastBroadcastAt = 0;
 const GHOST_BULLET_TTL_MS = 250;
 let ghostBullets = [];
 
+// Guest: time to wait for the host's first state snapshot before we declare
+// the P2P link dead and bounce the user back to the menu. Generous so TURN
+// fallback has a chance; short enough that "stuck on connecting" doesn't
+// silently waste minutes.
+const GUEST_HANDSHAKE_TIMEOUT_MS = 20_000;
+let _guestHandshakeDeadline = null;
+let _guestStatusInterval = null;
+let _guestStartedAt = 0;
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.floor(window.innerWidth * dpr);
@@ -265,13 +274,15 @@ function setupMpHandlers() {
         i++;
       }
       ui.setNetStatus("HOSTING");
+      ui.showOnly();
     } else {
-      // Guests stare at an empty map until the host's first state snapshot
-      // arrives over the DC. Surface that state so they don't think it broke.
-      const hostLink = mp.peerLinks?.get(mp.hostPlayerId);
-      ui.setNetStatus(hostLink?.isOpen() ? "ONLINE · P2P" : "ESTABLISHING P2P…");
+      // Guest: hold the "connecting" overlay up until the first state
+      // snapshot arrives over the DC. Without this, the user just sees an
+      // empty map and assumes the game broke. Hard timeout drops them back
+      // to the menu with a clear message if P2P never lands.
+      startGuestHandshakeWatch();
+      ui.showOnly("connecting");
     }
-    ui.showOnly();
   });
   mp.on("state", (data) => {
     // Host runs the sim locally and ignores its own broadcasts.
@@ -284,6 +295,12 @@ function setupMpHandlers() {
     }
     sim = inflated;
     if (sim.events?.length) processEvents(sim);
+    // First snapshot in: the P2P link is live and we have something to render.
+    if (state === "playing" && _guestHandshakeDeadline) {
+      endGuestHandshakeWatch();
+      ui.setNetStatus("ONLINE · P2P");
+      ui.showOnly();
+    }
   });
   // Guest → host inputs: feed them straight into the host's sim under the
   // sender's player ID. setInput keyed by player ID matches how solo works.
@@ -298,14 +315,22 @@ function setupMpHandlers() {
     else if (action.type === "ready") setReady(sim, fromId, !!action.ready);
   });
   mp.on("dcOpen", (peerId) => {
-    // Guest: surface the host-link as ONLINE once the DC actually opens,
-    // so they know they're not staring at an empty map for no reason.
-    if (!mp.isHost && peerId === mp.hostPlayerId) ui.setNetStatus("ONLINE · P2P");
+    // Guest: surface the host-link as ONLINE once the DC actually opens.
+    // We don't drop the connecting overlay yet — we still need the first
+    // state snapshot to know what to render.
+    if (!mp.isHost && peerId === mp.hostPlayerId) {
+      if (state === "playing" && _guestHandshakeDeadline) {
+        ui.setConnectingStatus("LINK OPEN · WAITING FOR HOST STATE");
+      } else {
+        ui.setNetStatus("ONLINE · P2P");
+      }
+    }
   });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
     const wasInGame = state === "playing" || state === "lobby";
     if (!wasInGame) return;
+    endGuestHandshakeWatch();
     alert("Disconnected from server" + (reason ? ` — ${reason}` : "") + ".");
     leaveToMenu();
   });
@@ -388,6 +413,7 @@ function renderLobby() {
 }
 
 function leaveToMenu() {
+  endGuestHandshakeWatch();
   if (mp) mp.leave();
   mp = null; sim = null; roomCode = null;
   predictMe = null;
@@ -396,6 +422,36 @@ function leaveToMenu() {
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
+}
+
+function startGuestHandshakeWatch() {
+  endGuestHandshakeWatch();
+  _guestStartedAt = performance.now();
+  ui.setConnectingStatus(
+    "NEGOTIATING WEBRTC",
+    "Punching through NAT. If the host's network is restrictive, P2P may fail. Hold tight…",
+  );
+  _guestStatusInterval = setInterval(() => {
+    const elapsed = Math.floor((performance.now() - _guestStartedAt) / 1000);
+    const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
+    const label = dcOpen ? "LINK OPEN · WAITING FOR HOST STATE" : "NEGOTIATING WEBRTC";
+    ui.setConnectingStatus(`${label} · ${elapsed}s`);
+  }, 250);
+  _guestHandshakeDeadline = setTimeout(() => {
+    _guestHandshakeDeadline = null;
+    const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
+    endGuestHandshakeWatch();
+    const why = dcOpen
+      ? "Reached the host but no game state arrived — host might be paused."
+      : "Couldn't reach the host directly. Your network may block peer-to-peer (try a different network or hotspot).";
+    alert("P2P handshake timed out.\n\n" + why);
+    leaveToMenu();
+  }, GUEST_HANDSHAKE_TIMEOUT_MS);
+}
+
+function endGuestHandshakeWatch() {
+  if (_guestStatusInterval) { clearInterval(_guestStatusInterval); _guestStatusInterval = null; }
+  if (_guestHandshakeDeadline) { clearTimeout(_guestHandshakeDeadline); _guestHandshakeDeadline = null; }
 }
 
 // Mirrors sim.js's circle-vs-AABB wall collision so prediction respects walls

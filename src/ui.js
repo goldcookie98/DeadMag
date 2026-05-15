@@ -116,6 +116,10 @@ export class UI {
       goStats: document.getElementById("gameover-stats"),
       goBack: document.getElementById("gameover-back"),
       netStatus: document.getElementById("net-status"),
+      connecting: document.getElementById("connecting"),
+      connectingStatus: document.getElementById("connecting-status"),
+      connectingSub: document.getElementById("connecting-sub"),
+      connectingCancel: document.getElementById("connecting-cancel"),
     };
     this.handlers = {};
     this._wire();
@@ -139,6 +143,7 @@ export class UI {
     this.el.joinBack.addEventListener("click", () => this.handlers.leave?.());
     this.el.shopReady.addEventListener("click", () => this.handlers.shopReady?.());
     this.el.goBack.addEventListener("click", () => this.handlers.leave?.());
+    this.el.connectingCancel?.addEventListener("click", () => this.handlers.leave?.());
 
     this.el.lobbyCode.addEventListener("click", () => {
       const code = this.el.lobbyCode.textContent;
@@ -150,10 +155,15 @@ export class UI {
   }
 
   showOnly(...names) {
-    for (const k of ["menu", "lobby", "join", "shop", "gameover"]) {
-      this.el[k].classList.toggle("hidden", !names.includes(k));
+    for (const k of ["menu", "lobby", "join", "shop", "gameover", "connecting"]) {
+      if (this.el[k]) this.el[k].classList.toggle("hidden", !names.includes(k));
     }
-    this.el.hud.classList.toggle("hidden", names.includes("menu") || names.includes("join") || names.includes("gameover") || names.includes("lobby"));
+    this.el.hud.classList.toggle("hidden", names.includes("menu") || names.includes("join") || names.includes("gameover") || names.includes("lobby") || names.includes("connecting"));
+  }
+
+  setConnectingStatus(text, sub) {
+    if (this.el.connectingStatus && text != null) this.el.connectingStatus.textContent = text;
+    if (this.el.connectingSub && sub != null) this.el.connectingSub.textContent = sub;
   }
 
   setLobby({ code, title, players, mode, canStart }) {
