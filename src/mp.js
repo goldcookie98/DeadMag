@@ -13,7 +13,8 @@
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", ""]);
 function isLocalHost() { return LOCAL_HOSTS.has(location.hostname); }
 
-const DEFAULT_REMOTE_SERVER = "wss://deadmag-server.onrender.com";
+const DEFAULT_REMOTE_SERVER = "wss://deadmag-server-eu.onrender.com";
+const STALE_SERVERS = new Set(["wss://deadmag-server.onrender.com"]);
 
 export function getSavedServerUrl() {
   const q = new URLSearchParams(location.search).get("server");
@@ -23,7 +24,11 @@ export function getSavedServerUrl() {
   }
   try {
     const saved = localStorage.getItem("deadmag.server");
-    if (saved) return saved;
+    if (saved && STALE_SERVERS.has(saved)) {
+      localStorage.removeItem("deadmag.server");
+    } else if (saved) {
+      return saved;
+    }
   } catch {}
   if (isLocalHost()) return "ws://" + (location.hostname || "localhost") + ":8080";
   return DEFAULT_REMOTE_SERVER;

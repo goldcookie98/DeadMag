@@ -145,7 +145,7 @@ function refreshServerLabel() {
 function promptServerUrl() {
   const current = getSavedServerUrl() || "";
   const next = window.prompt(
-    "Paste your DeadMag server URL (e.g. wss://deadmag-server.onrender.com).\nLeave blank to clear.",
+    "Paste your DeadMag server URL (e.g. wss://deadmag-server-eu.onrender.com).\nLeave blank to clear.",
     current
   );
   if (next === null) return;

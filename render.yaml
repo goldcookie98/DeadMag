@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: deadmag-server
+    name: deadmag-server-eu
     runtime: node
     plan: free
-    region: oregon
+    region: frankfurt
     autoDeploy: true
     branch: main
     buildCommand: npm install --omit=dev
