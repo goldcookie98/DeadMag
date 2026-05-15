@@ -17,13 +17,20 @@
 // or restrictive corporate firewalls we need TURN as a relay fallback —
 // without it those peers see "connection failed" and the DC never opens.
 //
-// Default is an ExpressTURN free account. If it ever stops working (creds
-// revoked, quota hit, server down) users can override via the TURN button on
+// Default layers ExpressTURN (primary) and openrelay (fallback) across UDP
+// and TCP transports so at least one path survives restrictive networks
+// that block UDP on non-standard ports. TLS-over-443 is the last resort for
+// the most locked-down clients. Users can override via the TURN button on
 // the menu — stored in localStorage as deadmag.ice (JSON).
 const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "turn:free.expressturn.com:3478", username: "000000002094198485", credential: "1pEMmv/0et9LnQFl3Hr2zTydvxo=" },
+  { urls: "turn:free.expressturn.com:3478?transport=tcp", username: "000000002094198485", credential: "1pEMmv/0et9LnQFl3Hr2zTydvxo=" },
+  { urls: "turn:openrelay.metered.ca:80",                username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443",               username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turns:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
 ];
 
 export function getSavedIceServers() {
