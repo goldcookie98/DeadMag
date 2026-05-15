@@ -895,7 +895,7 @@ html, body {
 .connecting-status { font-family: var(--mono); font-size: 14px; letter-spacing: 0.15em; color: var(--fg); }
 .connecting-status::after { content: ""; animation: connecting-dots 1.2s steps(4, end) infinite; }
 @keyframes connecting-dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
-.connecting-sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--dim); line-height: 1.6; }
+.connecting-sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--dim); line-height: 1.6; white-space: pre-wrap; }
 .connecting-actions { display: flex; gap: 10px; }
 
 /* ──────────────────────────── responsive trim ──────────────────────────── */

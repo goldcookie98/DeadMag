@@ -82,6 +82,7 @@ const GUEST_HANDSHAKE_TIMEOUT_MS = 20_000;
 let _guestHandshakeDeadline = null;
 let _guestStatusInterval = null;
 let _guestStartedAt = 0;
+let _lastDiag = null;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -326,6 +327,15 @@ function setupMpHandlers() {
       }
     }
   });
+  mp.on("diag", ({ peerId, diag }) => {
+    // Surface live WebRTC diagnostics on the connecting overlay. If the
+    // user reports "stuck on negotiating" we can see if STUN is reaching
+    // (srflx > 0) and whether TURN is reaching (relay > 0).
+    if (mp.isHost || peerId !== mp.hostPlayerId) return;
+    if (state !== "playing" || !_guestHandshakeDeadline) return;
+    _lastDiag = diag;
+    refreshGuestConnectingStatus();
+  });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
     const wasInGame = state === "playing" || state === "lobby";
@@ -427,26 +437,47 @@ function leaveToMenu() {
 function startGuestHandshakeWatch() {
   endGuestHandshakeWatch();
   _guestStartedAt = performance.now();
+  _lastDiag = null;
   ui.setConnectingStatus(
     "NEGOTIATING WEBRTC",
-    "Punching through NAT. If the host's network is restrictive, P2P may fail. Hold tight…",
+    "Punching through NAT. STUN gathers local + public reflexive paths; if both ends are restrictive we fall back to TURN relay. Hold tight…",
   );
-  _guestStatusInterval = setInterval(() => {
-    const elapsed = Math.floor((performance.now() - _guestStartedAt) / 1000);
-    const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
-    const label = dcOpen ? "LINK OPEN · WAITING FOR HOST STATE" : "NEGOTIATING WEBRTC";
-    ui.setConnectingStatus(`${label} · ${elapsed}s`);
-  }, 250);
+  _guestStatusInterval = setInterval(refreshGuestConnectingStatus, 300);
   _guestHandshakeDeadline = setTimeout(() => {
     _guestHandshakeDeadline = null;
     const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
+    const d = _lastDiag;
     endGuestHandshakeWatch();
-    const why = dcOpen
-      ? "Reached the host but no game state arrived — host might be paused."
-      : "Couldn't reach the host directly. Your network may block peer-to-peer (try a different network or hotspot).";
+    let why;
+    if (dcOpen) {
+      why = "Reached the host but no game state arrived — host might be paused.";
+    } else if (d && d.localRelay === 0) {
+      why = "No TURN relay candidates were gathered. The free TURN servers may be down or blocked. Try again, or run the game on a less restrictive network.";
+    } else if (d && d.remoteRelay === 0 && d.remoteSrflx === 0) {
+      why = "Couldn't see the host's network candidates — their browser may be blocking STUN/TURN.";
+    } else {
+      why = "Couldn't establish a direct link. Restrictive NAT on either side is the most common cause.";
+    }
     alert("P2P handshake timed out.\n\n" + why);
     leaveToMenu();
   }, GUEST_HANDSHAKE_TIMEOUT_MS);
+}
+
+function refreshGuestConnectingStatus() {
+  if (!_guestHandshakeDeadline) return;
+  const elapsed = Math.floor((performance.now() - _guestStartedAt) / 1000);
+  const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
+  const d = _lastDiag;
+  const phase = dcOpen ? "LINK OPEN · WAITING FOR HOST STATE"
+    : d?.iceState === "checking" ? "CHECKING ICE CANDIDATES"
+    : d?.iceState === "connected" ? "ICE CONNECTED · OPENING CHANNEL"
+    : d?.iceState === "failed" ? "ICE FAILED · RETRYING"
+    : "NEGOTIATING WEBRTC";
+  const ice = d ? `ICE:${d.iceState} · GATHER:${d.gathering}` : "ICE:—";
+  const cand = d
+    ? `LOCAL host:${d.localHost} stun:${d.localSrflx} relay:${d.localRelay} · REMOTE host:${d.remoteHost} stun:${d.remoteSrflx} relay:${d.remoteRelay}`
+    : "";
+  ui.setConnectingStatus(`${phase} · ${elapsed}s`, `${ice}\n${cand}`);
 }
 
 function endGuestHandshakeWatch() {

@@ -45,29 +45,54 @@ const ICE_CONFIG = {
 const CHANNEL_LABEL = "game";
 
 export class PeerLink {
-  constructor({ peerId, isOfferer, onSignal, onOpen, onMessage, onClose }) {
+  constructor({ peerId, isOfferer, onSignal, onOpen, onMessage, onClose, onDiag }) {
     this.peerId = peerId;
     this.isOfferer = !!isOfferer;
     this.onSignal = onSignal || (() => {});
     this.onOpen = onOpen || (() => {});
     this.onMessage = onMessage || (() => {});
     this.onClose = onClose || (() => {});
+    this.onDiag = onDiag || (() => {});
     this.state = "connecting";
     this.dc = null;
     this._closed = false;
     this._pendingIce = [];
+    this._iceRestartTried = false;
+    // Diagnostic counters surfaced via onDiag so the UI can show what's
+    // actually happening during the handshake (host candidates alone mean
+    // STUN never reached; zero relay means TURN is unreachable).
+    this._diag = { iceState: "new", pcState: "new", gathering: "new",
+      localHost: 0, localSrflx: 0, localRelay: 0, remoteHost: 0, remoteSrflx: 0, remoteRelay: 0 };
 
     this.pc = new RTCPeerConnection(ICE_CONFIG);
     this.pc.onicecandidate = (ev) => {
       if (!ev.candidate) return;
+      this._countCandidate("local", ev.candidate);
       this.onSignal({ to: this.peerId, kind: "ice", data: ev.candidate.toJSON() });
     };
+    this.pc.onicegatheringstatechange = () => {
+      this._diag.gathering = this.pc.iceGatheringState;
+      console.log("[p2p] peer", this.peerId, "ice-gathering:", this.pc.iceGatheringState);
+      this._emitDiag();
+    };
     this.pc.oniceconnectionstatechange = () => {
-      console.log("[p2p] peer", this.peerId, "ice:", this.pc.iceConnectionState);
+      const s = this.pc.iceConnectionState;
+      this._diag.iceState = s;
+      console.log("[p2p] peer", this.peerId, "ice:", s);
+      this._emitDiag();
+      // ICE can fail once and recover via ICE restart — give it one chance
+      // before the PC tears down. Only the offerer can initiate.
+      if (s === "failed" && this.isOfferer && !this._iceRestartTried && !this._closed) {
+        this._iceRestartTried = true;
+        console.log("[p2p] peer", this.peerId, "ICE failed; restarting…");
+        this._negotiate({ iceRestart: true });
+      }
     };
     this.pc.onconnectionstatechange = () => {
       const s = this.pc.connectionState;
+      this._diag.pcState = s;
       console.log("[p2p] peer", this.peerId, "pc:", s);
+      this._emitDiag();
       // "disconnected" is transient — ICE can drop and recover. Only tear
       // down on terminal states; let "disconnected" linger and either heal
       // back to "connected" or escalate to "failed".
@@ -84,9 +109,29 @@ export class PeerLink {
     }
   }
 
-  async _negotiate() {
+  _countCandidate(side, c) {
+    // Sometimes the candidate object has .type; sometimes (with toJSON) we
+    // only have the .candidate string with "typ host"/"typ srflx"/"typ relay".
+    let t = c?.type;
+    if (!t && typeof c?.candidate === "string") {
+      const m = c.candidate.match(/ typ (host|srflx|relay)/);
+      if (m) t = m[1];
+    }
+    if (!t) return;
+    const key = side + (t === "host" ? "Host" : t === "srflx" ? "Srflx" : t === "relay" ? "Relay" : null);
+    if (key && this._diag[key] != null) this._diag[key] += 1;
+    this._emitDiag();
+  }
+
+  _emitDiag() {
+    try { this.onDiag({ ...this._diag }); } catch {}
+  }
+
+  getDiag() { return { ...this._diag }; }
+
+  async _negotiate(opts = {}) {
     try {
-      const offer = await this.pc.createOffer();
+      const offer = await this.pc.createOffer(opts.iceRestart ? { iceRestart: true } : undefined);
       await this.pc.setLocalDescription(offer);
       this.onSignal({ to: this.peerId, kind: "offer", data: { type: offer.type, sdp: offer.sdp } });
     } catch (e) {
@@ -129,6 +174,7 @@ export class PeerLink {
         if (!this.pc.remoteDescription || !this.pc.remoteDescription.type) {
           this._pendingIce.push(msg.data);
         } else {
+          this._countCandidate("remote", msg.data);
           try { await this.pc.addIceCandidate(msg.data); } catch {}
         }
       }
@@ -140,6 +186,7 @@ export class PeerLink {
   async _flushIce() {
     const pending = this._pendingIce.splice(0);
     for (const c of pending) {
+      this._countCandidate("remote", c);
       try { await this.pc.addIceCandidate(c); } catch {}
     }
   }

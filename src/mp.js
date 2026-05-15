@@ -299,6 +299,7 @@ export class Mp {
           this._emit("disconnected", "host disconnected");
         }
       },
+      onDiag: (diag) => this._emit("diag", { peerId, diag }),
     });
     this.peerLinks.set(peerId, link);
     return link;
