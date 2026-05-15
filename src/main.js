@@ -50,13 +50,18 @@ let isHost = false;
 let lobby = { players: [], mode: "horde" };
 let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 
-// Snapshot interpolation: keep recent server states + wall-clock receive times.
-// We render the world at (now - RENDER_DELAY_MS), lerping between the bracketing pair,
-// so the 30Hz server tick stops feeling like 30Hz.
+// Snapshot interpolation. The timeline is the server's authoritative timeMs
+// (not the client's wall clock) — that way TCP bursts and dyno hiccups don't
+// freeze the lerp and cause remote players to teleport. renderClock chases
+// (latest server timeMs − RENDER_DELAY_MS) and advances by dt each frame.
 const RENDER_DELAY_MS = 150;
 const EXTRAPOLATE_MAX_MS = 120;
 const STATE_BUFFER_MAX_MS = 800;
+const RENDER_CLOCK_SNAP_MS = 400;   // if we're this far off, snap instead of drift
+const RENDER_CLOCK_CHASE = 0.08;    // per-frame drift correction toward target
 let stateBuffer = [];
+let renderClock = 0;
+let renderClockReady = false;
 let predictMe = null;          // { x, y, angle } — local player's predicted pose
 let _lastInputSendAt = 0;
 let _lastSentShoot = false;
@@ -249,6 +254,7 @@ function setupMpHandlers() {
     state = "playing";
     sim = null;
     stateBuffer = [];
+    renderClockReady = false;
     predictMe = null;
     _lastSentShoot = false;
     _lastSentReload = false;
@@ -262,9 +268,9 @@ function setupMpHandlers() {
   mp.on("state", (data) => {
     if (typeof window !== "undefined") window.__lastState = data;
     const inflated = inflateState(data);
-    const nowMs = performance.now();
-    stateBuffer.push({ receivedAt: nowMs, state: inflated });
-    while (stateBuffer.length > 2 && nowMs - stateBuffer[0].receivedAt > STATE_BUFFER_MAX_MS) {
+    const serverMs = data.timeMs ?? 0;
+    stateBuffer.push({ serverMs, state: inflated });
+    while (stateBuffer.length > 2 && serverMs - stateBuffer[0].serverMs > STATE_BUFFER_MAX_MS) {
       stateBuffer.shift();
     }
     sim = inflated;
@@ -302,28 +308,40 @@ function inflateState(s) {
   };
 }
 
+function advanceRenderClock(dtMs) {
+  if (!stateBuffer.length) return;
+  const latest = stateBuffer[stateBuffer.length - 1].serverMs;
+  const target = latest - RENDER_DELAY_MS;
+  if (!renderClockReady || Math.abs(renderClock - target) > RENDER_CLOCK_SNAP_MS) {
+    renderClock = target;
+    renderClockReady = true;
+    return;
+  }
+  renderClock += dtMs;
+  // Gentle pull toward target so we don't drift forever if frame timer skews.
+  renderClock += (target - renderClock) * RENDER_CLOCK_CHASE;
+}
+
 function buildRenderSim() {
   if (!stateBuffer.length) return sim;
   if (stateBuffer.length === 1) return stateBuffer[0].state;
-  const target = performance.now() - RENDER_DELAY_MS;
   let prevIdx = -1;
   for (let i = stateBuffer.length - 1; i >= 0; i--) {
-    if (stateBuffer[i].receivedAt <= target) { prevIdx = i; break; }
+    if (stateBuffer[i].serverMs <= renderClock) { prevIdx = i; break; }
   }
   if (prevIdx < 0) return stateBuffer[0].state;
   if (prevIdx >= stateBuffer.length - 1) {
-    // Target is past our newest snapshot — extrapolate from the last segment
-    // for a short window so remote players keep gliding instead of freezing.
+    // renderClock outran the newest snapshot — extrapolate briefly.
     const last = stateBuffer[stateBuffer.length - 1];
     const prev = stateBuffer[stateBuffer.length - 2];
-    const span = Math.max(1, last.receivedAt - prev.receivedAt);
-    const over = Math.min(EXTRAPOLATE_MAX_MS, target - last.receivedAt);
+    const span = Math.max(1, last.serverMs - prev.serverMs);
+    const over = Math.min(EXTRAPOLATE_MAX_MS, renderClock - last.serverMs);
     const t = 1 + over / span;
     return interpolateStates(prev.state, last.state, t);
   }
   const a = stateBuffer[prevIdx], b = stateBuffer[prevIdx + 1];
-  const span = Math.max(1, b.receivedAt - a.receivedAt);
-  const t = Math.max(0, Math.min(1, (target - a.receivedAt) / span));
+  const span = Math.max(1, b.serverMs - a.serverMs);
+  const t = Math.max(0, Math.min(1, (renderClock - a.serverMs) / span));
   return interpolateStates(a.state, b.state, t);
 }
 
@@ -378,6 +396,7 @@ function leaveToMenu() {
   mp = null; sim = null; roomCode = null;
   predictMe = null;
   stateBuffer = [];
+  renderClockReady = false;
   ghostBullets = [];
   state = "menu";
   ui.showOnly("menu");
@@ -525,12 +544,14 @@ function reconcilePerFrame(snap, serverMe) {
 
 let last = performance.now();
 function frame(now) {
-  const dt = Math.min(33, now - last) / 1000;
+  const dtMs = Math.min(33, now - last);
+  const dt = dtMs / 1000;
   last = now;
 
   if (state === "playing" && sim) {
     const snap = input.snapshot(camera);
     const online = !!mp;
+    if (online) advanceRenderClock(dtMs);
     if (!online) {
       // Solo: run the sim locally.
       if (sim.players.get(localId)) setInput(sim, localId, snap);
