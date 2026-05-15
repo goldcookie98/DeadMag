@@ -53,8 +53,9 @@ let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 // Snapshot interpolation: keep recent server states + wall-clock receive times.
 // We render the world at (now - RENDER_DELAY_MS), lerping between the bracketing pair,
 // so the 30Hz server tick stops feeling like 30Hz.
-const RENDER_DELAY_MS = 100;
-const STATE_BUFFER_MAX_MS = 600;
+const RENDER_DELAY_MS = 150;
+const EXTRAPOLATE_MAX_MS = 120;
+const STATE_BUFFER_MAX_MS = 800;
 let stateBuffer = [];
 let predictMe = null;          // { x, y, angle } — local player's predicted pose
 let _lastInputSendAt = 0;
@@ -310,7 +311,16 @@ function buildRenderSim() {
     if (stateBuffer[i].receivedAt <= target) { prevIdx = i; break; }
   }
   if (prevIdx < 0) return stateBuffer[0].state;
-  if (prevIdx >= stateBuffer.length - 1) return stateBuffer[stateBuffer.length - 1].state;
+  if (prevIdx >= stateBuffer.length - 1) {
+    // Target is past our newest snapshot — extrapolate from the last segment
+    // for a short window so remote players keep gliding instead of freezing.
+    const last = stateBuffer[stateBuffer.length - 1];
+    const prev = stateBuffer[stateBuffer.length - 2];
+    const span = Math.max(1, last.receivedAt - prev.receivedAt);
+    const over = Math.min(EXTRAPOLATE_MAX_MS, target - last.receivedAt);
+    const t = 1 + over / span;
+    return interpolateStates(prev.state, last.state, t);
+  }
   const a = stateBuffer[prevIdx], b = stateBuffer[prevIdx + 1];
   const span = Math.max(1, b.receivedAt - a.receivedAt);
   const t = Math.max(0, Math.min(1, (target - a.receivedAt) / span));
