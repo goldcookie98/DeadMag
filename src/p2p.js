@@ -16,31 +16,63 @@
 // STUN alone gets us through cone NAT (most home routers). For symmetric NAT
 // or restrictive corporate firewalls we need TURN as a relay fallback —
 // without it those peers see "connection failed" and the DC never opens.
-// openrelay's free TURN endpoint covers UDP, TCP (firewall-friendly), and
-// TLS-over-443 (the most-allowed path). Free → unreliable; consider running
-// our own coturn if this becomes load-bearing.
-const ICE_CONFIG = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-  ],
-  iceCandidatePoolSize: 4,
-};
+//
+// The default uses openrelay's public free TURN, which is heavily oversubscribed
+// and frequently unreachable. If TURN doesn't gather relay candidates (the
+// connecting overlay shows relay:0) the user should bring their own: free
+// metered.ca account gives 50 GB/mo with personal credentials, signup at
+// https://www.metered.ca/tools/openrelay/ — paste them via the TURN button
+// on the menu. Override is stored in localStorage as deadmag.ice (JSON).
+const DEFAULT_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "turn:openrelay.metered.ca:80",                   username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443",                  username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp",    username: "openrelayproject", credential: "openrelayproject" },
+];
+
+export function getSavedIceServers() {
+  // URL param: ?ice=<urlencoded JSON array>. Falls back to localStorage.
+  try {
+    const q = new URLSearchParams(location.search).get("ice");
+    if (q) {
+      const parsed = JSON.parse(q);
+      if (Array.isArray(parsed) && parsed.length) {
+        try { localStorage.setItem("deadmag.ice", JSON.stringify(parsed)); } catch {}
+        return parsed;
+      }
+    }
+  } catch {}
+  try {
+    const saved = localStorage.getItem("deadmag.ice");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    }
+  } catch {}
+  return DEFAULT_ICE_SERVERS;
+}
+
+export function setSavedIceServers(servers) {
+  if (!servers || !Array.isArray(servers) || servers.length === 0) {
+    try { localStorage.removeItem("deadmag.ice"); } catch {}
+    return;
+  }
+  try { localStorage.setItem("deadmag.ice", JSON.stringify(servers)); } catch {}
+}
+
+export function summarizeIceServers(servers) {
+  const list = servers || getSavedIceServers();
+  const turns = list.filter((s) => /^turn[s]?:/i.test(Array.isArray(s.urls) ? s.urls[0] : s.urls));
+  if (!turns.length) return "no TURN";
+  const first = turns[0];
+  const url = Array.isArray(first.urls) ? first.urls[0] : first.urls;
+  return `${turns.length} TURN · ${url.replace(/^turn[s]?:/i, "")}`;
+}
+
+function buildIceConfig() {
+  return { iceServers: getSavedIceServers(), iceCandidatePoolSize: 4 };
+}
 
 const CHANNEL_LABEL = "game";
 
@@ -64,7 +96,7 @@ export class PeerLink {
     this._diag = { iceState: "new", pcState: "new", gathering: "new",
       localHost: 0, localSrflx: 0, localRelay: 0, remoteHost: 0, remoteSrflx: 0, remoteRelay: 0 };
 
-    this.pc = new RTCPeerConnection(ICE_CONFIG);
+    this.pc = new RTCPeerConnection(buildIceConfig());
     this.pc.onicecandidate = (ev) => {
       if (!ev.candidate) return;
       this._countCandidate("local", ev.candidate);

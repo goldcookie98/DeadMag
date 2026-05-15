@@ -4,6 +4,7 @@ import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady, 
 import { render, recordMuzzleFlash } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
+import { getSavedIceServers, setSavedIceServers, summarizeIceServers } from "./p2p.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { WALLS, MAP_W, MAP_H } from "./map.js";
 import { mountVersion } from "./version-display.js";
@@ -138,6 +139,7 @@ function onMenuAction(action) {
   else if (action === "mp-create") createLobby();
   else if (action === "mp-join") openJoin();
   else if (action === "set-server") promptServerUrl();
+  else if (action === "set-turn") promptTurnConfig();
 }
 
 function refreshServerLabel() {
@@ -158,7 +160,42 @@ function promptServerUrl() {
   refreshServerLabel();
 }
 
+function refreshTurnLabel() {
+  const el = document.getElementById("set-turn-current");
+  if (!el) return;
+  el.textContent = summarizeIceServers();
+}
+
+function promptTurnConfig() {
+  const current = getSavedIceServers();
+  const example = JSON.stringify(current, null, 2);
+  const instr = [
+    "Paste your TURN servers as a JSON array.",
+    "",
+    "The default uses the openrelayproject public TURN which is often dead.",
+    "Get free 50 GB/mo TURN at https://www.metered.ca/tools/openrelay/ — sign up,",
+    'copy the JSON they hand you (the "iceServers" array), and paste it here.',
+    "",
+    "Leave blank to reset to defaults.",
+  ].join("\n");
+  const next = window.prompt(instr, example);
+  if (next === null) return;
+  const trimmed = next.trim();
+  if (!trimmed) {
+    setSavedIceServers(null);
+    refreshTurnLabel();
+    return;
+  }
+  let parsed;
+  try { parsed = JSON.parse(trimmed); }
+  catch (e) { alert("That doesn't look like JSON.\n" + e.message); return; }
+  if (!Array.isArray(parsed)) { alert("Expected a JSON array of iceServers entries."); return; }
+  setSavedIceServers(parsed);
+  refreshTurnLabel();
+}
+
 refreshServerLabel();
+refreshTurnLabel();
 
 function startSolo(m) {
   mode = m;
@@ -454,8 +491,11 @@ function startGuestHandshakeWatch() {
     let why;
     if (dcOpen) {
       why = "Reached the host but no game state arrived — host might be paused.";
+    } else if (d && d.localRelay === 0 && d.remoteRelay === 0) {
+      why = "TURN relay didn't gather any candidates on either side. The public free TURN is down/blocked.\n\n"
+        + "Fix: grab free TURN credentials from https://www.metered.ca/tools/openrelay/ (50 GB/mo, no card) and paste them via the TURN button on the menu. Both you AND the host need this.";
     } else if (d && d.localRelay === 0) {
-      why = "No TURN relay candidates were gathered. The free TURN servers may be down or blocked. Try again, or run the game on a less restrictive network.";
+      why = "Your side couldn't reach any TURN server. Try the TURN button on the menu to set your own (https://www.metered.ca/tools/openrelay/).";
     } else if (d && d.remoteRelay === 0 && d.remoteSrflx === 0) {
       why = "Couldn't see the host's network candidates — their browser may be blocking STUN/TURN.";
     } else {
