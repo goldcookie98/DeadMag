@@ -69,11 +69,10 @@ let _lastSentReload = false;
 let _lastLocalFireAt = 0;      // gates client-side muzzle flash + ghost bullets to weapon rate
 
 // Client-side predicted bullets. Spawned at our predicted muzzle on every
-// local fire-cycle, advanced at the weapon's projectile speed, dropped on
-// walls / map edges / TTL. Cosmetic only — server's sim is authoritative
-// for actual hits. Lives long enough (~250ms) to bridge to when the
-// server's real bullet enters the snapshot stream so the shot feels instant.
-const GHOST_BULLET_TTL_MS = 250;
+// local fire-cycle. Cosmetic only — server is authoritative for actual hits.
+// Ghosts live until they hit a wall, leave the map, or reach the weapon's
+// range, mirroring server bullet life. The server's copy of *our own*
+// bullets is filtered from the rendered snapshot so we only ever see one.
 let ghostBullets = [];
 
 const CONNECTING_TIMEOUT_MS = 30_000;
@@ -487,22 +486,26 @@ function tryLocalFire(snap, meAuth, nowSend) {
       vx: Math.cos(angle) * w.proj,
       vy: Math.sin(angle) * w.proj,
       weapon: meAuth.weapon,
-      bornAt: nowSend,
+      range: w.range,
+      traveled: 0,
     });
   }
   _lastLocalFireAt = nowSend;
   return true;
 }
 
-function advanceGhostBullets(dt, nowMs) {
+function advanceGhostBullets(dt) {
   if (ghostBullets.length === 0) return;
   const next = [];
   for (const b of ghostBullets) {
-    if (nowMs - b.bornAt > GHOST_BULLET_TTL_MS) continue;
-    const nx = b.x + b.vx * dt;
-    const ny = b.y + b.vy * dt;
+    const stepX = b.vx * dt;
+    const stepY = b.vy * dt;
+    const nx = b.x + stepX;
+    const ny = b.y + stepY;
     if (nx < 0 || nx > MAP_W || ny < 0 || ny > MAP_H) continue;
     if (predictCollideWalls(nx, ny, 3)) continue;
+    b.traveled += Math.hypot(stepX, stepY);
+    if (b.range && b.traveled >= b.range) continue;
     b.x = nx; b.y = ny;
     next.push(b);
   }
@@ -576,7 +579,7 @@ function frame(now) {
         if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
         if (snap.shoot) tryLocalFire(snap, meAuth, nowSend);
       }
-      advanceGhostBullets(dt, nowSend);
+      advanceGhostBullets(dt);
     }
 
     // Solo renders from the live sim. Online renders from the interpolated
@@ -590,8 +593,11 @@ function frame(now) {
         renderSim = { ...renderSim, players };
       }
     }
-    if (online && ghostBullets.length > 0) {
-      renderSim = { ...renderSim, bullets: [...renderSim.bullets, ...ghostBullets] };
+    if (online) {
+      // Hide the server's copy of our own bullets — the local ghost is doing
+      // the visual. The server still applies damage authoritatively.
+      const filtered = renderSim.bullets.filter((b) => b.ownerId !== localId);
+      renderSim = { ...renderSim, bullets: ghostBullets.length ? [...filtered, ...ghostBullets] : filtered };
     }
     const meRender = renderSim.players.get(localId);
     if (meRender) camera.follow(meRender.x, meRender.y);
