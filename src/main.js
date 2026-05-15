@@ -172,9 +172,8 @@ function promptTurnConfig() {
   const instr = [
     "Paste your TURN servers as a JSON array.",
     "",
-    "The default uses the openrelayproject public TURN which is often dead.",
-    "Get free 50 GB/mo TURN at https://www.metered.ca/tools/openrelay/ — sign up,",
-    'copy the JSON they hand you (the "iceServers" array), and paste it here.',
+    "Defaults bundle ExpressTURN + openrelay across UDP/TCP/TLS — usually fine.",
+    "Only override if you've got your own creds.",
     "",
     "Leave blank to reset to defaults.",
   ].join("\n");
