@@ -1,6 +1,6 @@
 # DeadMag
 
-**Play:** [https://goldcookie98.github.io/DeadMag/](http://deadmag.ddns.net/)
+**Play:** [deadmag.ext.io](https://deadmag.ext.io/)
 
 2D online top-down shooter. HTML5 Canvas + Node.js WebSockets.
 
@@ -22,42 +22,9 @@ Three states when playing with others: **alive** → **downed** (hp 0, bleeding 
 - `F` — hold near a downed teammate to revive (5s)
 - `Esc` — back to menu
 
-## Run it
-
-### Client only (solo + bots)
-```bash
-npm run dev
-```
-Open http://localhost:8000 — Solo Horde and Arsenal-vs-bots run entirely in the browser, no server needed. Same on the GitHub Pages live URL.
-
-### Multiplayer
-Multiplayer talks to an authoritative WebSocket server at `server/index.js`. You point the client at it via the **SERVER** button on the menu (or `?server=wss://your-host`).
-
-#### Run server locally (LAN play / dev)
-```bash
-npm install
-npm run server   # listens on :8080
-```
-On the same machine, the client auto-detects `ws://localhost:8080`. From another box on your LAN, set `?server=ws://<your-lan-ip>:8080`.
-
-#### Host it on Render.com (free, internet play)
-1. Push this repo to GitHub.
-2. Sign in at <https://render.com>, click **New → Blueprint**, point it at your fork. Render reads `render.yaml` and creates a free Node web service running `node server/index.js`.
-3. Copy the URL Render gives you (e.g. `https://deadmag-server.onrender.com`).
-4. Open the live game, click **SERVER** on the menu, paste the URL (the client converts `https://` → `wss://` automatically).
-5. Create / join lobbies as normal. First connect can take ~30s while the free-tier instance cold-starts; the UI shows a counter.
-
-Same flow works on Fly.io / Railway / any Node host that exposes `$PORT` and supports WebSocket upgrades.
-
 ## Versioning
 
 `version.json` is auto-bumped by a `prepare-commit-msg` git hook on every commit, so every push lands a new version number. The number shows bottom-right.
-
-## Stack
-
-- Canvas + ES modules, no framework
-- Server-authoritative sim shared between client (solo) and server (multiplayer) — `src/sim.js`
-- `ws` for WebSockets
 
 ## Status
 
