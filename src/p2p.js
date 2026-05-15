@@ -17,18 +17,13 @@
 // or restrictive corporate firewalls we need TURN as a relay fallback —
 // without it those peers see "connection failed" and the DC never opens.
 //
-// The default uses openrelay's public free TURN, which is heavily oversubscribed
-// and frequently unreachable. If TURN doesn't gather relay candidates (the
-// connecting overlay shows relay:0) the user should bring their own: free
-// metered.ca account gives 50 GB/mo with personal credentials, signup at
-// https://www.metered.ca/tools/openrelay/ — paste them via the TURN button
-// on the menu. Override is stored in localStorage as deadmag.ice (JSON).
+// Default is an ExpressTURN free account. If it ever stops working (creds
+// revoked, quota hit, server down) users can override via the TURN button on
+// the menu — stored in localStorage as deadmag.ice (JSON).
 const DEFAULT_ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "turn:openrelay.metered.ca:80",                   username: "openrelayproject", credential: "openrelayproject" },
-  { urls: "turn:openrelay.metered.ca:443",                  username: "openrelayproject", credential: "openrelayproject" },
-  { urls: "turn:openrelay.metered.ca:443?transport=tcp",    username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:free.expressturn.com:3478", username: "000000002094198485", credential: "1pEMmv/0et9LnQFl3Hr2zTydvxo=" },
 ];
 
 export function getSavedIceServers() {
