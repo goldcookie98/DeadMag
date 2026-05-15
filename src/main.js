@@ -328,13 +328,13 @@ function setupMpHandlers() {
     }
   });
   mp.on("diag", ({ peerId, diag }) => {
-    // Surface live WebRTC diagnostics on the connecting overlay. If the
-    // user reports "stuck on negotiating" we can see if STUN is reaching
-    // (srflx > 0) and whether TURN is reaching (relay > 0).
+    // Surface live WebRTC diagnostics on the connecting overlay. Capture
+    // for the host-link no matter the lobby/playing state — the PeerLink
+    // is created on `welcome` and most ICE transitions can happen during
+    // the lobby, well before start. Only the *display* is gated.
     if (mp.isHost || peerId !== mp.hostPlayerId) return;
-    if (state !== "playing" || !_guestHandshakeDeadline) return;
     _lastDiag = diag;
-    refreshGuestConnectingStatus();
+    if (state === "playing" && _guestHandshakeDeadline) refreshGuestConnectingStatus();
   });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
@@ -437,11 +437,14 @@ function leaveToMenu() {
 function startGuestHandshakeWatch() {
   endGuestHandshakeWatch();
   _guestStartedAt = performance.now();
-  _lastDiag = null;
+  // Prime _lastDiag from the live link (it was created back in `welcome`
+  // and may already be deep into the handshake).
+  _lastDiag = mp?.peerLinks?.get(mp.hostPlayerId)?.getDiag?.() || null;
   ui.setConnectingStatus(
     "NEGOTIATING WEBRTC",
     "Punching through NAT. STUN gathers local + public reflexive paths; if both ends are restrictive we fall back to TURN relay. Hold tight…",
   );
+  refreshGuestConnectingStatus();
   _guestStatusInterval = setInterval(refreshGuestConnectingStatus, 300);
   _guestHandshakeDeadline = setTimeout(() => {
     _guestHandshakeDeadline = null;
@@ -466,17 +469,23 @@ function startGuestHandshakeWatch() {
 function refreshGuestConnectingStatus() {
   if (!_guestHandshakeDeadline) return;
   const elapsed = Math.floor((performance.now() - _guestStartedAt) / 1000);
-  const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
-  const d = _lastDiag;
+  const hostLink = mp?.peerLinks?.get(mp.hostPlayerId);
+  const dcOpen = !!hostLink?.isOpen?.();
+  // Pull the freshest diag straight from the live PeerLink each refresh
+  // so we don't depend on having captured every prior event.
+  const live = hostLink?.getDiag?.();
+  const d = live || _lastDiag;
   const phase = dcOpen ? "LINK OPEN · WAITING FOR HOST STATE"
+    : !hostLink ? "WAITING FOR PEER LINK"
     : d?.iceState === "checking" ? "CHECKING ICE CANDIDATES"
     : d?.iceState === "connected" ? "ICE CONNECTED · OPENING CHANNEL"
     : d?.iceState === "failed" ? "ICE FAILED · RETRYING"
+    : d?.gathering === "gathering" ? "GATHERING CANDIDATES"
     : "NEGOTIATING WEBRTC";
-  const ice = d ? `ICE:${d.iceState} · GATHER:${d.gathering}` : "ICE:—";
+  const ice = d ? `ICE:${d.iceState} · GATHER:${d.gathering} · PC:${d.pcState}` : "ICE:— (no events yet)";
   const cand = d
     ? `LOCAL host:${d.localHost} stun:${d.localSrflx} relay:${d.localRelay} · REMOTE host:${d.remoteHost} stun:${d.remoteSrflx} relay:${d.remoteRelay}`
-    : "";
+    : "(awaiting host offer)";
   ui.setConnectingStatus(`${phase} · ${elapsed}s`, `${ice}\n${cand}`);
 }
 
