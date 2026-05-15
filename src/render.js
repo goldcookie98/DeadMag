@@ -20,6 +20,10 @@ const _bloodDecals = [];
 // since it's a UI effect, not part of sim.timeMs.
 const _muzzleFlashes = [];
 const MUZZLE_LIFE_MS = 70;
+const _hitSparks = [];
+const HIT_SPARK_LIFE_MS = 220;
+let _hitMarkerUntil = 0;
+const HIT_MARKER_LIFE_MS = 180;
 
 export function render(ctx, sim, camera, localId, mouse) {
   const { vw, vh } = camera;
@@ -45,10 +49,11 @@ export function render(ctx, sim, camera, localId, mouse) {
 
   drawBullets(ctx, sim.bullets);
   drawMuzzleFlashes(ctx);
+  drawHitSparks(ctx);
 
   ctx.restore();
 
-  if (mouse) drawCrosshair(ctx, mouse.x, mouse.y);
+  if (mouse) drawCrosshair(ctx, mouse.x, mouse.y, performance.now() < _hitMarkerUntil);
 }
 
 export function recordZombieDeath(x, y, timeMs) {
@@ -59,6 +64,37 @@ export function recordZombieDeath(x, y, timeMs) {
 export function recordMuzzleFlash(x, y, angle, weapon, wallClockMs) {
   _muzzleFlashes.push({ x, y, angle, weapon, t: wallClockMs });
   if (_muzzleFlashes.length > 12) _muzzleFlashes.shift();
+}
+
+export function recordHit(x, y) {
+  const t = performance.now();
+  _hitSparks.push({ x, y, t });
+  if (_hitSparks.length > 24) _hitSparks.shift();
+  _hitMarkerUntil = t + HIT_MARKER_LIFE_MS;
+}
+
+function drawHitSparks(ctx) {
+  if (_hitSparks.length === 0) return;
+  const now = performance.now();
+  for (let i = _hitSparks.length - 1; i >= 0; i--) {
+    const s = _hitSparks[i];
+    const age = (now - s.t) / HIT_SPARK_LIFE_MS;
+    if (age >= 1) { _hitSparks.splice(i, 1); continue; }
+    const fade = 1 - age;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.strokeStyle = VOLT.yellow;
+    ctx.lineWidth = 2;
+    const r = 4 + age * 10;
+    ctx.beginPath();
+    for (let k = 0; k < 4; k++) {
+      const a = (Math.PI / 2) * k + age * 1.5;
+      ctx.moveTo(s.x + Math.cos(a) * r * 0.4, s.y + Math.sin(a) * r * 0.4);
+      ctx.lineTo(s.x + Math.cos(a) * r, s.y + Math.sin(a) * r);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawMuzzleFlashes(ctx) {
@@ -352,7 +388,7 @@ function drawExplosion(ctx, e, timeMs) {
   ctx.restore();
 }
 
-function drawCrosshair(ctx, x, y) {
+function drawCrosshair(ctx, x, y, hitMarker = false) {
   ctx.save();
   ctx.shadowColor = VOLT.cyan;
   ctx.shadowBlur = 5;
@@ -369,5 +405,17 @@ function drawCrosshair(ctx, x, y) {
   ctx.beginPath();
   ctx.arc(x, y, 1.5, 0, Math.PI * 2);
   ctx.fill();
+  if (hitMarker) {
+    ctx.strokeStyle = VOLT.yellow;
+    ctx.shadowColor = VOLT.yellow;
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - 14, y - 14); ctx.lineTo(x - 6, y - 6);
+    ctx.moveTo(x + 14, y - 14); ctx.lineTo(x + 6, y - 6);
+    ctx.moveTo(x - 14, y + 14); ctx.lineTo(x - 6, y + 6);
+    ctx.moveTo(x + 14, y + 14); ctx.lineTo(x + 6, y + 6);
+    ctx.stroke();
+  }
   ctx.restore();
 }

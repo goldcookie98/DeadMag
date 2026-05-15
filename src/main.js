@@ -1,7 +1,7 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
 import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
-import { render, recordMuzzleFlash } from "./render.js";
+import { render, recordMuzzleFlash, recordHit } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
@@ -494,7 +494,30 @@ function tryLocalFire(snap, meAuth, nowSend) {
   return true;
 }
 
-function advanceGhostBullets(dt) {
+const GHOST_ZOMBIE_R = 13;
+const GHOST_PLAYER_R = 14;
+const GHOST_BULLET_R = 3;
+
+function ghostBulletHit(nx, ny, snapSim) {
+  if (!snapSim) return null;
+  for (const z of snapSim.zombies) {
+    const dx = z.x - nx, dy = z.y - ny;
+    if (dx * dx + dy * dy <= (GHOST_ZOMBIE_R + GHOST_BULLET_R) ** 2) {
+      return { x: nx, y: ny };
+    }
+  }
+  for (const [, p] of snapSim.players) {
+    if (p.id === localId) continue;
+    if (p.state !== "alive") continue;
+    const dx = p.x - nx, dy = p.y - ny;
+    if (dx * dx + dy * dy <= (GHOST_PLAYER_R + GHOST_BULLET_R) ** 2) {
+      return { x: nx, y: ny };
+    }
+  }
+  return null;
+}
+
+function advanceGhostBullets(dt, snapSim) {
   if (ghostBullets.length === 0) return;
   const next = [];
   for (const b of ghostBullets) {
@@ -504,6 +527,8 @@ function advanceGhostBullets(dt) {
     const ny = b.y + stepY;
     if (nx < 0 || nx > MAP_W || ny < 0 || ny > MAP_H) continue;
     if (predictCollideWalls(nx, ny, 3)) continue;
+    const hit = ghostBulletHit(nx, ny, snapSim);
+    if (hit) { recordHit(hit.x, hit.y); continue; }
     b.traveled += Math.hypot(stepX, stepY);
     if (b.range && b.traveled >= b.range) continue;
     b.x = nx; b.y = ny;
@@ -579,7 +604,6 @@ function frame(now) {
         if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
         if (snap.shoot) tryLocalFire(snap, meAuth, nowSend);
       }
-      advanceGhostBullets(dt);
     }
 
     // Solo renders from the live sim. Online renders from the interpolated
@@ -594,6 +618,9 @@ function frame(now) {
       }
     }
     if (online) {
+      // Advance ghosts AFTER building renderSim so hit checks run against the
+      // visible (interpolated) world — hit feedback matches what the user sees.
+      advanceGhostBullets(dt, renderSim);
       // Hide the server's copy of our own bullets — the local ghost is doing
       // the visual. The server still applies damage authoritatively.
       const filtered = renderSim.bullets.filter((b) => b.ownerId !== localId);
