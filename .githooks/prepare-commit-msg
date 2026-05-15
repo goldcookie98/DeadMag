@@ -1,6 +1,7 @@
 #!/bin/sh
-# Auto-bumps version.json patch number on every commit, then stages it
-# so the bump lands in the same commit. Result: every push ships a new version.
+# Auto-bumps version.json on every commit and stages it into the same commit.
+# Default bump is PATCH. A [minor] or [major] tag in the commit message bumps
+# MINOR or MAJOR instead (and resets lower components to 0).
 
 # Skip on merge/squash/amend message sources to avoid surprising rewrites.
 case "$2" in
@@ -11,14 +12,27 @@ ROOT="$(git rev-parse --show-toplevel)"
 FILE="$ROOT/version.json"
 [ -f "$FILE" ] || exit 0
 
+MSG_FILE="$1"
+LEVEL="patch"
+if [ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ]; then
+  if grep -qE '\[major\]' "$MSG_FILE"; then LEVEL="major"
+  elif grep -qE '\[minor\]' "$MSG_FILE"; then LEVEL="minor"
+  fi
+fi
+
 CURRENT=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FILE" | head -n1)
 [ -n "$CURRENT" ] || CURRENT="0.0.0"
 
 MAJOR=$(printf '%s' "$CURRENT" | cut -d. -f1)
 MINOR=$(printf '%s' "$CURRENT" | cut -d. -f2)
 PATCH=$(printf '%s' "$CURRENT" | cut -d. -f3)
-NEXT_PATCH=$((PATCH + 1))
-NEXT="$MAJOR.$MINOR.$NEXT_PATCH"
+
+case "$LEVEL" in
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  *)     PATCH=$((PATCH + 1)) ;;
+esac
+NEXT="$MAJOR.$MINOR.$PATCH"
 
 printf '{ "version": "%s" }\n' "$NEXT" > "$FILE"
 git add "$FILE" >/dev/null 2>&1 || true
