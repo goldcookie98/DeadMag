@@ -56,7 +56,7 @@ async function main() {
 
   // Wait for host lobby to show two players
   await host.waitForFunction(() => {
-    const rows = document.querySelectorAll("#lobby-players .row");
+    const rows = document.querySelectorAll("#lobby-players .op-row:not(.empty)");
     return rows.length >= 2;
   }, { timeout: 8000 });
   console.log("HOST sees 2 players");

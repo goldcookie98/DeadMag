@@ -1,10 +1,9 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady, serializeSim } from "./sim.js";
+import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
 import { render, recordMuzzleFlash } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
-import { getSavedIceServers, setSavedIceServers, summarizeIceServers } from "./p2p.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { WALLS, MAP_W, MAP_H } from "./map.js";
 import { mountVersion } from "./version-display.js";
@@ -56,34 +55,25 @@ let myName = "P_" + Math.floor(Math.random() * 899 + 100);
 // so the 30Hz server tick stops feeling like 30Hz.
 const RENDER_DELAY_MS = 100;
 const STATE_BUFFER_MAX_MS = 600;
-// Host broadcasts at 30Hz — matches the previous server tick rate, which is
-// what the guest's snapshot interpolation is tuned for.
-const HOST_BROADCAST_INTERVAL_MS = 33;
 let stateBuffer = [];
 let predictMe = null;          // { x, y, angle } — local player's predicted pose
 let _lastInputSendAt = 0;
 let _lastSentShoot = false;
 let _lastSentReload = false;
 let _lastLocalFireAt = 0;      // gates client-side muzzle flash + ghost bullets to weapon rate
-let _lastBroadcastAt = 0;
 
 // Client-side predicted bullets. Spawned at our predicted muzzle on every
 // local fire-cycle, advanced at the weapon's projectile speed, dropped on
-// walls / map edges / TTL. Cosmetic only — host's sim is authoritative for
-// actual hits. Lives long enough (~250ms) to bridge to when the host's
-// real bullet enters the snapshot stream so the shot feels instant.
+// walls / map edges / TTL. Cosmetic only — server's sim is authoritative
+// for actual hits. Lives long enough (~250ms) to bridge to when the
+// server's real bullet enters the snapshot stream so the shot feels instant.
 const GHOST_BULLET_TTL_MS = 250;
 let ghostBullets = [];
 
-// Guest: time to wait for the host's first state snapshot before we declare
-// the P2P link dead and bounce the user back to the menu. Generous so TURN
-// fallback has a chance; short enough that "stuck on connecting" doesn't
-// silently waste minutes.
-const GUEST_HANDSHAKE_TIMEOUT_MS = 20_000;
-let _guestHandshakeDeadline = null;
-let _guestStatusInterval = null;
-let _guestStartedAt = 0;
-let _lastDiag = null;
+const CONNECTING_TIMEOUT_MS = 30_000;
+let _connectingDeadline = null;
+let _connectingStatusInterval = null;
+let _connectingStartedAt = 0;
 
 function resize() {
   const dpr = window.devicePixelRatio || 1;
@@ -119,17 +109,15 @@ ui.on("shopReady", () => {
   const me = sim.players.get(localId);
   if (!me || me.state !== "alive") return;
   const next = !me.ready;
-  // Host owns the sim, so its own actions apply directly. Guests forward
-  // to the host over the DataChannel.
-  if (mp && !mp.isHost) mp.sendReady(next);
+  if (mp) mp.sendReady(next);
   else setReady(sim, localId, next);
 });
 ui.on("buy", (id) => {
-  if (mp && !mp.isHost) mp.sendBuy(id);
+  if (mp) mp.sendBuy(id);
   else if (sim) shopBuy(sim, localId, id);
 });
 ui.on("equip", (wid) => {
-  if (mp && !mp.isHost) mp.sendEquip(wid);
+  if (mp) mp.sendEquip(wid);
   else if (sim) switchWeapon(sim, localId, wid);
 });
 
@@ -139,7 +127,6 @@ function onMenuAction(action) {
   else if (action === "mp-create") createLobby();
   else if (action === "mp-join") openJoin();
   else if (action === "set-server") promptServerUrl();
-  else if (action === "set-turn") promptTurnConfig();
 }
 
 function refreshServerLabel() {
@@ -160,41 +147,7 @@ function promptServerUrl() {
   refreshServerLabel();
 }
 
-function refreshTurnLabel() {
-  const el = document.getElementById("set-turn-current");
-  if (!el) return;
-  el.textContent = summarizeIceServers();
-}
-
-function promptTurnConfig() {
-  const current = getSavedIceServers();
-  const example = JSON.stringify(current, null, 2);
-  const instr = [
-    "Paste your TURN servers as a JSON array.",
-    "",
-    "Defaults bundle ExpressTURN + openrelay across UDP/TCP/TLS — usually fine.",
-    "Only override if you've got your own creds.",
-    "",
-    "Leave blank to reset to defaults.",
-  ].join("\n");
-  const next = window.prompt(instr, example);
-  if (next === null) return;
-  const trimmed = next.trim();
-  if (!trimmed) {
-    setSavedIceServers(null);
-    refreshTurnLabel();
-    return;
-  }
-  let parsed;
-  try { parsed = JSON.parse(trimmed); }
-  catch (e) { alert("That doesn't look like JSON.\n" + e.message); return; }
-  if (!Array.isArray(parsed)) { alert("Expected a JSON array of iceServers entries."); return; }
-  setSavedIceServers(parsed);
-  refreshTurnLabel();
-}
-
 refreshServerLabel();
-refreshTurnLabel();
 
 function startSolo(m) {
   mode = m;
@@ -293,37 +246,20 @@ function setupMpHandlers() {
     mode = data.mode;
     localId = mp.localPlayerId;
     state = "playing";
-    sim = createSim(mode);
+    sim = null;
     stateBuffer = [];
     predictMe = null;
     _lastSentShoot = false;
     _lastSentReload = false;
     _lastLocalFireAt = 0;
-    _lastBroadcastAt = 0;
     ghostBullets = [];
-    if (mp.isHost) {
-      // Host runs the authoritative sim locally. Seed it with every peer
-      // from the lobby, keyed by their server-issued IDs so all clients
-      // refer to the same player records.
-      let i = 0;
-      for (const p of mp.serverPlayers) {
-        addPlayer(sim, p.name, COLORS[i % COLORS.length], false, p.id);
-        i++;
-      }
-      ui.setNetStatus("HOSTING");
-      ui.showOnly();
-    } else {
-      // Guest: hold the "connecting" overlay up until the first state
-      // snapshot arrives over the DC. Without this, the user just sees an
-      // empty map and assumes the game broke. Hard timeout drops them back
-      // to the menu with a clear message if P2P never lands.
-      startGuestHandshakeWatch();
-      ui.showOnly("connecting");
-    }
+    // Hold the connecting overlay up until the first state snapshot
+    // lands, so the player doesn't see an empty map.
+    startConnectingWatch();
+    ui.showOnly("connecting");
   });
   mp.on("state", (data) => {
-    // Host runs the sim locally and ignores its own broadcasts.
-    if (mp?.isHost) return;
+    if (typeof window !== "undefined") window.__lastState = data;
     const inflated = inflateState(data);
     const nowMs = performance.now();
     stateBuffer.push({ receivedAt: nowMs, state: inflated });
@@ -332,51 +268,17 @@ function setupMpHandlers() {
     }
     sim = inflated;
     if (sim.events?.length) processEvents(sim);
-    // First snapshot in: the P2P link is live and we have something to render.
-    if (state === "playing" && _guestHandshakeDeadline) {
-      endGuestHandshakeWatch();
-      ui.setNetStatus("ONLINE · P2P");
+    if (state === "playing" && _connectingDeadline) {
+      endConnectingWatch();
+      ui.setNetStatus("ONLINE");
       ui.showOnly();
     }
-  });
-  // Guest → host inputs: feed them straight into the host's sim under the
-  // sender's player ID. setInput keyed by player ID matches how solo works.
-  mp.on("input", ({ fromId, input: peerInput }) => {
-    if (!mp?.isHost || !sim) return;
-    if (sim.players.get(fromId)) setInput(sim, fromId, peerInput);
-  });
-  mp.on("peerAction", ({ fromId, action }) => {
-    if (!mp?.isHost || !sim) return;
-    if (action.type === "buy") shopBuy(sim, fromId, action.itemId);
-    else if (action.type === "equip") switchWeapon(sim, fromId, action.weapon);
-    else if (action.type === "ready") setReady(sim, fromId, !!action.ready);
-  });
-  mp.on("dcOpen", (peerId) => {
-    // Guest: surface the host-link as ONLINE once the DC actually opens.
-    // We don't drop the connecting overlay yet — we still need the first
-    // state snapshot to know what to render.
-    if (!mp.isHost && peerId === mp.hostPlayerId) {
-      if (state === "playing" && _guestHandshakeDeadline) {
-        ui.setConnectingStatus("LINK OPEN · WAITING FOR HOST STATE");
-      } else {
-        ui.setNetStatus("ONLINE · P2P");
-      }
-    }
-  });
-  mp.on("diag", ({ peerId, diag }) => {
-    // Surface live WebRTC diagnostics on the connecting overlay. Capture
-    // for the host-link no matter the lobby/playing state — the PeerLink
-    // is created on `welcome` and most ICE transitions can happen during
-    // the lobby, well before start. Only the *display* is gated.
-    if (mp.isHost || peerId !== mp.hostPlayerId) return;
-    _lastDiag = diag;
-    if (state === "playing" && _guestHandshakeDeadline) refreshGuestConnectingStatus();
   });
   mp.on("disconnected", (reason) => {
     ui.setNetStatus("DISCONNECTED");
     const wasInGame = state === "playing" || state === "lobby";
     if (!wasInGame) return;
-    endGuestHandshakeWatch();
+    endConnectingWatch();
     alert("Disconnected from server" + (reason ? ` — ${reason}` : "") + ".");
     leaveToMenu();
   });
@@ -392,9 +294,11 @@ function hostStartGame() {
 }
 
 function inflateState(s) {
-  s.players = new Map(s.players.map((p) => [p.id, { ...p, arsenalKills: new Set(p.arsenalKills || []) }]));
-  s.inputs = new Map();
-  return s;
+  return {
+    ...s,
+    players: new Map(s.players.map((p) => [p.id, { ...p, arsenalKills: new Set(p.arsenalKills || []) }])),
+    inputs: new Map(),
+  };
 }
 
 function buildRenderSim() {
@@ -459,7 +363,7 @@ function renderLobby() {
 }
 
 function leaveToMenu() {
-  endGuestHandshakeWatch();
+  endConnectingWatch();
   if (mp) mp.leave();
   mp = null; sim = null; roomCode = null;
   predictMe = null;
@@ -470,67 +374,29 @@ function leaveToMenu() {
   ui.setNetStatus("");
 }
 
-function startGuestHandshakeWatch() {
-  endGuestHandshakeWatch();
-  _guestStartedAt = performance.now();
-  // Prime _lastDiag from the live link (it was created back in `welcome`
-  // and may already be deep into the handshake).
-  _lastDiag = mp?.peerLinks?.get(mp.hostPlayerId)?.getDiag?.() || null;
-  ui.setConnectingStatus(
-    "NEGOTIATING WEBRTC",
-    "Punching through NAT. STUN gathers local + public reflexive paths; if both ends are restrictive we fall back to TURN relay. Hold tight…",
-  );
-  refreshGuestConnectingStatus();
-  _guestStatusInterval = setInterval(refreshGuestConnectingStatus, 300);
-  _guestHandshakeDeadline = setTimeout(() => {
-    _guestHandshakeDeadline = null;
-    const dcOpen = !!mp?.peerLinks?.get(mp.hostPlayerId)?.isOpen?.();
-    const d = _lastDiag;
-    endGuestHandshakeWatch();
-    let why;
-    if (dcOpen) {
-      why = "Reached the host but no game state arrived — host might be paused.";
-    } else if (d && d.localRelay === 0 && d.remoteRelay === 0) {
-      why = "TURN relay didn't gather any candidates on either side. The public free TURN is down/blocked.\n\n"
-        + "Fix: grab free TURN credentials from https://www.metered.ca/tools/openrelay/ (50 GB/mo, no card) and paste them via the TURN button on the menu. Both you AND the host need this.";
-    } else if (d && d.localRelay === 0) {
-      why = "Your side couldn't reach any TURN server. Try the TURN button on the menu to set your own (https://www.metered.ca/tools/openrelay/).";
-    } else if (d && d.remoteRelay === 0 && d.remoteSrflx === 0) {
-      why = "Couldn't see the host's network candidates — their browser may be blocking STUN/TURN.";
-    } else {
-      why = "Couldn't establish a direct link. Restrictive NAT on either side is the most common cause.";
-    }
-    alert("P2P handshake timed out.\n\n" + why);
+function startConnectingWatch() {
+  endConnectingWatch();
+  _connectingStartedAt = performance.now();
+  ui.setConnectingStatus("WAITING FOR FIRST SNAPSHOT", "Server is spinning up the sim.");
+  refreshConnectingStatus();
+  _connectingStatusInterval = setInterval(refreshConnectingStatus, 500);
+  _connectingDeadline = setTimeout(() => {
+    _connectingDeadline = null;
+    endConnectingWatch();
+    alert("Server didn't send game state in time. Try again.");
     leaveToMenu();
-  }, GUEST_HANDSHAKE_TIMEOUT_MS);
+  }, CONNECTING_TIMEOUT_MS);
 }
 
-function refreshGuestConnectingStatus() {
-  if (!_guestHandshakeDeadline) return;
-  const elapsed = Math.floor((performance.now() - _guestStartedAt) / 1000);
-  const hostLink = mp?.peerLinks?.get(mp.hostPlayerId);
-  const dcOpen = !!hostLink?.isOpen?.();
-  // Pull the freshest diag straight from the live PeerLink each refresh
-  // so we don't depend on having captured every prior event.
-  const live = hostLink?.getDiag?.();
-  const d = live || _lastDiag;
-  const phase = dcOpen ? "LINK OPEN · WAITING FOR HOST STATE"
-    : !hostLink ? "WAITING FOR PEER LINK"
-    : d?.iceState === "checking" ? "CHECKING ICE CANDIDATES"
-    : d?.iceState === "connected" ? "ICE CONNECTED · OPENING CHANNEL"
-    : d?.iceState === "failed" ? "ICE FAILED · RETRYING"
-    : d?.gathering === "gathering" ? "GATHERING CANDIDATES"
-    : "NEGOTIATING WEBRTC";
-  const ice = d ? `ICE:${d.iceState} · GATHER:${d.gathering} · PC:${d.pcState}` : "ICE:— (no events yet)";
-  const cand = d
-    ? `LOCAL host:${d.localHost} stun:${d.localSrflx} relay:${d.localRelay} · REMOTE host:${d.remoteHost} stun:${d.remoteSrflx} relay:${d.remoteRelay}`
-    : "(awaiting host offer)";
-  ui.setConnectingStatus(`${phase} · ${elapsed}s`, `${ice}\n${cand}`);
+function refreshConnectingStatus() {
+  if (!_connectingDeadline) return;
+  const elapsed = Math.floor((performance.now() - _connectingStartedAt) / 1000);
+  ui.setConnectingStatus(`WAITING FOR FIRST SNAPSHOT · ${elapsed}s`, "Server is spinning up the sim.");
 }
 
-function endGuestHandshakeWatch() {
-  if (_guestStatusInterval) { clearInterval(_guestStatusInterval); _guestStatusInterval = null; }
-  if (_guestHandshakeDeadline) { clearTimeout(_guestHandshakeDeadline); _guestHandshakeDeadline = null; }
+function endConnectingWatch() {
+  if (_connectingStatusInterval) { clearInterval(_connectingStatusInterval); _connectingStatusInterval = null; }
+  if (_connectingDeadline) { clearTimeout(_connectingDeadline); _connectingDeadline = null; }
 }
 
 // Mirrors sim.js's circle-vs-AABB wall collision so prediction respects walls
@@ -654,24 +520,15 @@ function frame(now) {
 
   if (state === "playing" && sim) {
     const snap = input.snapshot(camera);
-    const hosting = !!mp && mp.isHost;
-    const guesting = !!mp && !mp.isHost;
-    if (!mp || hosting) {
-      // Host (and solo) run the sim directly. Local input goes in via the
-      // normal path; peer inputs arrived on the "input" event handler.
+    const online = !!mp;
+    if (!online) {
+      // Solo: run the sim locally.
       if (sim.players.get(localId)) setInput(sim, localId, snap);
       step(sim, dt);
       processEvents(sim);
-      if (hosting) {
-        const nowB = performance.now();
-        if (nowB - _lastBroadcastAt >= HOST_BROADCAST_INTERVAL_MS) {
-          mp.broadcastState(serializeSim(sim));
-          _lastBroadcastAt = nowB;
-        }
-      }
-    } else if (guesting) {
+    } else {
       const nowSend = performance.now();
-      // Bypass throttle on action-edges (click, reload tap) so the host
+      // Bypass throttle on action-edges (click, reload tap) so the server
       // sees the press before the next interval window.
       const shootEdge  = snap.shoot  && !_lastSentShoot;
       const reloadEdge = snap.reload && !_lastSentReload;
@@ -686,20 +543,15 @@ function frame(now) {
       if (meAuth) {
         reconcilePerFrame(snap, meAuth);
         if (meAuth.state === "alive") advancePredict(dt, snap, meAuth);
-        // Local fire prediction. Fire on every frame the trigger is held
-        // (cooldown gates to the weapon's rate), so autofire feels alive
-        // instead of only flashing on the click-edge.
         if (snap.shoot) tryLocalFire(snap, meAuth, nowSend);
       }
       advanceGhostBullets(dt, nowSend);
     }
 
-    // Host renders straight from its live sim (zero RTT to itself, no need
-    // for snapshot interpolation or prediction). Guests render from the
-    // interpolated state buffer with the local player overridden by the
-    // predicted pose.
-    let renderSim = guesting ? buildRenderSim() : sim;
-    if (guesting && predictMe) {
+    // Solo renders from the live sim. Online renders from the interpolated
+    // state buffer with the local player overridden by the predicted pose.
+    let renderSim = online ? buildRenderSim() : sim;
+    if (online && predictMe) {
       const me = renderSim.players.get(localId);
       if (me) {
         const players = new Map(renderSim.players);
@@ -707,10 +559,7 @@ function frame(now) {
         renderSim = { ...renderSim, players };
       }
     }
-    if (guesting && ghostBullets.length > 0) {
-      // Splice predicted bullets in so they render alongside authoritative
-      // ones. Guests will briefly see both during the ~RTT-bridge window;
-      // that's preferable to the click feeling dead.
+    if (online && ghostBullets.length > 0) {
       renderSim = { ...renderSim, bullets: [...renderSim.bullets, ...ghostBullets] };
     }
     const meRender = renderSim.players.get(localId);

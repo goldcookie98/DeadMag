@@ -1,39 +1,39 @@
-// DeadMag signaling server.
+// DeadMag authoritative server.
 //
-// As of v1.x the server no longer runs the sim. Players connect peer-to-peer
-// via WebRTC DataChannels and the host runs the authoritative simulation in
-// the browser. The server's job is now narrow:
-//
-//   - issue 4-char room codes
-//   - track who's in each room (id + name + ws)
-//   - elect a host (first joiner; promoted to next-in-line if host leaves)
-//   - relay WebRTC SDP/ICE messages between peers in the same room
-//   - broadcast lobby state changes (mode, roster) for pre-game UI
-//
-// All gameplay traffic (state, input, buy, equip, ready) skips the server
-// entirely and rides the DataChannel.
+// The server now runs the simulation. Clients connect over a single
+// WebSocket, send their input/buy/equip/ready messages, and receive
+// state snapshots at 30Hz. No P2P, no WebRTC, no TURN — every connection
+// is just wss://. Same model as diep.io / agar.io.
 //
 // Wire protocol (client ↔ server):
 //   c→s: { type:"create"|"join", code?, name }
-//   c→s: { type:"mode", mode }                    (host only)
-//   c→s: { type:"start", mode }                   (host only, broadcast)
-//   c→s: { type:"signal", to:peerId, data }       (relay to that peer)
+//   c→s: { type:"mode", mode }          (host only — pre-game)
+//   c→s: { type:"start", mode }         (host only — kicks off the sim)
+//   c→s: { type:"input", input }
+//   c→s: { type:"buy", itemId }
+//   c→s: { type:"equip", weapon }
+//   c→s: { type:"ready", ready }
 //   c→s: { type:"ping" }
 //   s→c: { type:"welcome", code, playerId, hostId, mode, players }
 //   s→c: { type:"lobby",   code, mode, hostId, players }
-//   s→c: { type:"peerJoined", peer:{id,name} }    (host gets this when a guest joins)
-//   s→c: { type:"peerLeft",   peerId }
-//   s→c: { type:"start", mode }
-//   s→c: { type:"signal", from:peerId, data }
-//   s→c: { type:"error", message }
+//   s→c: { type:"start",   mode }
+//   s→c: { type:"state",   state }      (30Hz once a game is running)
+//   s→c: { type:"error",   message }
 //   s→c: { type:"pong" }
 
 import http from "http";
 import { WebSocketServer } from "ws";
+import {
+  createSim, addPlayer, removePlayer, setInput, step, serializeSim,
+  shopBuy, switchWeapon, setReady,
+} from "../src/sim.js";
 
 const PORT = Number(process.env.PORT) || 8080;
 const ROOM_TTL_MS = 1000 * 60 * 30;
+const TICK_HZ = 30;
+const TICK_MS = 1000 / TICK_HZ;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
 
 const rooms = new Map();
 
@@ -55,12 +55,16 @@ function createRoom() {
     hostId: null,
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
+    sim: null,
+    tickInterval: null,
+    lastTickAt: 0,
   };
   rooms.set(code, room);
   return room;
 }
 
 function destroyRoom(room) {
+  stopTick(room);
   rooms.delete(room.code);
 }
 
@@ -72,6 +76,11 @@ function addClient(room, ws, name) {
   const client = { id: playerId, ws, name: name || ("P_" + playerId) };
   room.players.push(client);
   if (room.hostId == null) room.hostId = playerId;
+  // If the sim is already running, splice the new client in as a live player.
+  if (room.sim) {
+    const colorIdx = room.players.length - 1;
+    addPlayer(room.sim, client.name, COLORS[colorIdx % COLORS.length], false, client.id);
+  }
   return client;
 }
 
@@ -79,6 +88,7 @@ function removeClient(room, ws) {
   const idx = room.players.findIndex((p) => p.ws === ws);
   if (idx < 0) return null;
   const [client] = room.players.splice(idx, 1);
+  if (room.sim) removePlayer(room.sim, client.id);
   if (room.hostId === client.id) {
     room.hostId = room.players[0]?.id ?? null;
   }
@@ -111,23 +121,47 @@ function sendTo(ws, msg) {
   try { ws.send(JSON.stringify(msg)); } catch {}
 }
 
-function sendToId(room, peerId, msg) {
-  const target = room.players.find((p) => p.id === peerId);
-  if (!target) return false;
-  try { target.ws.send(JSON.stringify(msg)); return true; } catch { return false; }
+function startTick(room) {
+  stopTick(room);
+  room.lastTickAt = Date.now();
+  room.tickInterval = setInterval(() => tick(room), TICK_MS);
+}
+
+function stopTick(room) {
+  if (room.tickInterval) { clearInterval(room.tickInterval); room.tickInterval = null; }
+}
+
+function tick(room) {
+  if (!room.sim) return;
+  const now = Date.now();
+  const dt = Math.min(0.05, (now - room.lastTickAt) / 1000);
+  room.lastTickAt = now;
+  step(room.sim, dt);
+  const snapshot = serializeSim(room.sim);
+  broadcast(room, { type: "state", state: snapshot });
+}
+
+function startGame(room, mode) {
+  room.mode = (mode === "arsenal" || mode === "horde") ? mode : "horde";
+  room.sim = createSim(room.mode);
+  room.players.forEach((p, i) => {
+    addPlayer(room.sim, p.name, COLORS[i % COLORS.length], false, p.id);
+  });
+  broadcast(room, { type: "start", mode: room.mode });
+  startTick(room);
 }
 
 const httpServer = http.createServer((req, res) => {
   if (req.url === "/health" || req.url === "/") {
     res.writeHead(200, { "content-type": "text/plain" });
-    res.end(`DeadMag signaling ok · rooms=${rooms.size}\n`);
+    res.end(`DeadMag server ok · rooms=${rooms.size}\n`);
     return;
   }
   res.writeHead(404);
   res.end();
 });
 const wss = new WebSocketServer({ server: httpServer });
-httpServer.listen(PORT, () => console.log(`[DeadMag signaling] listening on :${PORT}`));
+httpServer.listen(PORT, () => console.log(`[DeadMag] listening on :${PORT}`));
 
 wss.on("connection", (ws) => {
   let room = null;
@@ -167,21 +201,23 @@ wss.on("connection", (ws) => {
         hostId: room.hostId,
         players: room.players.map((p) => ({ id: p.id, name: p.name })),
       });
-      // Tell the host (and any existing peers) that a new peer joined so the
-      // host can initiate WebRTC. Send before the lobby broadcast so the host
-      // can start negotiation as soon as possible.
-      broadcast(room, { type: "peerJoined", peer: { id: client.id, name: client.name } }, ws);
-      broadcast(room, lobbyPayload(room));
-    } else if (m.type === "mode" && room && client && client.id === room.hostId) {
+      broadcast(room, lobbyPayload(room), ws);
+    } else if (m.type === "mode" && room && client && client.id === room.hostId && !room.sim) {
       if (m.mode === "horde" || m.mode === "arsenal") {
         room.mode = m.mode;
         broadcast(room, lobbyPayload(room));
       }
-    } else if (m.type === "start" && room && client && client.id === room.hostId) {
-      broadcast(room, { type: "start", mode: m.mode || room.mode });
-    } else if (m.type === "signal" && room && client && typeof m.to === "number") {
-      // Forward an SDP offer/answer or ICE candidate to a peer in the same room.
-      sendToId(room, m.to, { type: "signal", from: client.id, data: m.data });
+    } else if (m.type === "start" && room && client && client.id === room.hostId && !room.sim) {
+      startGame(room, m.mode || room.mode);
+    } else if (m.type === "input" && room && client && room.sim) {
+      // Apply immediately so the next tick reflects this input.
+      if (room.sim.players.get(client.id)) setInput(room.sim, client.id, m.input || {});
+    } else if (m.type === "buy" && room && client && room.sim) {
+      shopBuy(room.sim, client.id, m.itemId);
+    } else if (m.type === "equip" && room && client && room.sim) {
+      switchWeapon(room.sim, client.id, m.weapon);
+    } else if (m.type === "ready" && room && client && room.sim) {
+      setReady(room.sim, client.id, !!m.ready);
     }
     if (room) room.lastActiveAt = Date.now();
   });
@@ -191,7 +227,6 @@ wss.on("connection", (ws) => {
     const removed = removeClient(room, ws);
     if (!removed) return;
     if (rooms.has(room.code)) {
-      broadcast(room, { type: "peerLeft", peerId: removed.id });
       broadcast(room, lobbyPayload(room));
     }
   });
