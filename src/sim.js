@@ -1,5 +1,8 @@
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
-import { WALLS, SPAWN_POINTS, ZOMBIE_SPAWNS, MAP_W, MAP_H } from "./map.js";
+import {
+  WALLS, BARRICADE, CRATE, PAP, DOORWAY, SPAWN_POINTS, ZOMBIE_SPAWNS,
+  ROOM1_W, MAP_W, MAP_H, currentWalls,
+} from "./map.js";
 import { buildNavGrid, computeFlowField, sampleFlow } from "./pathfinding.js";
 
 const PLAYER_R = 14;
@@ -30,8 +33,49 @@ const BRUTE_SHOVE = 30;
 const FLOW_REFRESH_MS = 200;
 const DIRECT_CHASE_RANGE = 80;
 
+// Interactions
+const INTERACT_RANGE = 64;
+const CRATE_COST = 950;
+const CRATE_ANIM_MS = 3500;
+const CRATE_BLOW_UP_DMG = 60;
+const BARRICADE_COST = 1000;
+const PAP_COST = 10000;
+const PAP_MIN_WAVE = 5;
+const CRATE_BLOWUP_CHANCE = 0.10;
+const CRATE_VOLT_CHANCE = 0.05;
+const CRATE_RIPPLE_CHANCE = 0.05;
+const CRATE_NORMAL_POOL = ["shotgun", "smg", "sniper", "rocket", "knife"];
+
 let _id = 1;
 const nextId = () => _id++;
+
+// Stats produced by Pack-a-Punch. Applied as a derived multiplier — we don't
+// add a "smg+" variant to WEAPONS, we just multiply at the read site.
+function weaponEff(p, slot = p.activeSlot) {
+  const id = p.slots?.[slot];
+  if (!id) return null;
+  const base = WEAPONS[id];
+  if (!base) return null;
+  if (!p.slotPacked?.[slot]) return base;
+  return {
+    ...base,
+    dmg: base.dmg * 2,
+    mag: base.mag * 2,
+    rate: base.rate / 2,
+    range: base.range * 2,
+    splashR: base.splashR != null ? base.splashR * 1.4 : base.splashR,
+    splashDmg: base.splashDmg != null ? base.splashDmg * 2 : base.splashDmg,
+    chainCount: base.chainCount != null ? base.chainCount + 2 : base.chainCount,
+    chainRange: base.chainRange != null ? base.chainRange * 1.4 : base.chainRange,
+    chargeMaxMs: base.chargeMaxMs != null ? base.chargeMaxMs * 0.7 : base.chargeMaxMs,
+  };
+}
+
+function syncActiveWeapon(p) {
+  const id = p.slots[p.activeSlot];
+  p.weapon = id;
+  p.ammo = id ? (p.slotAmmo[p.activeSlot] ?? 0) : 0;
+}
 
 export function makePlayer(name, color, isBot = false) {
   const spawn = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
@@ -43,12 +87,18 @@ export function makePlayer(name, color, isBot = false) {
     angle: 0,
     hp: 100, maxHp: 100, armor: 0,
     weapon: "pistol",
-    inventory: { pistol: true },
+    slots: ["pistol", null],
+    activeSlot: 0,
+    slotAmmo: [WEAPONS.pistol.mag, 0],
+    slotPacked: [false, false],
     ammo: WEAPONS.pistol.mag,
     reloadingUntil: 0,
     reloadDuration: 0,
     lastShotAt: 0,
     chargingSince: 0,
+    crateOpenedAt: 0,
+    crateResult: null,
+    crateBlowUp: false,
     cash: 0,
     lives: 3,
     alive: true,
@@ -138,8 +188,15 @@ function pickZombieKind(sim) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+function rebuildNav(sim) {
+  if (!sim._nav) return;
+  sim._nav.grid = buildNavGrid(currentWalls(sim), MAP_W, MAP_H);
+  sim._nav.fields.clear();
+  sim._nav.lastUpdateAt = -Infinity;
+}
+
 export function createSim(mode = "horde") {
-  return {
+  const sim = {
     mode,
     tick: 0,
     timeMs: 0,
@@ -162,15 +219,12 @@ export function createSim(mode = "horde") {
     shopOpen: false,
     gameOver: false,
     winnerId: null,
+    barricadeDown: false,
     events: [],
-    // Underscore prefix keeps this off the wire (serializeSim ignores it).
-    // Walls are static, so the nav grid is built once and reused.
-    _nav: {
-      grid: buildNavGrid(WALLS, MAP_W, MAP_H),
-      fields: new Map(),
-      lastUpdateAt: -Infinity,
-    },
+    _nav: { grid: null, fields: new Map(), lastUpdateAt: -Infinity },
   };
+  rebuildNav(sim);
+  return sim;
 }
 
 export function addPlayer(sim, name, color, isBot = false, forcedId = null) {
@@ -194,9 +248,14 @@ export function serializeSim(sim) {
       name: p.name, color: p.color, isBot: p.isBot,
       x: p.x, y: p.y, vx: p.vx, vy: p.vy, angle: p.angle,
       hp: p.hp, maxHp: p.maxHp, armor: p.armor,
-      weapon: p.weapon, inventory: p.inventory,
+      weapon: p.weapon,
+      slots: [...p.slots],
+      activeSlot: p.activeSlot,
+      slotAmmo: [...p.slotAmmo],
+      slotPacked: [...p.slotPacked],
       ammo: p.ammo, reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
       lastShotAt: p.lastShotAt, chargingSince: p.chargingSince,
+      crateOpenedAt: p.crateOpenedAt, crateResult: p.crateResult, crateBlowUp: p.crateBlowUp,
       cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
       state: p.state, deathAt: p.deathAt, downedAt: p.downedAt,
       bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
@@ -225,6 +284,7 @@ export function serializeSim(sim) {
     shopOpen: sim.shopOpen,
     gameOver: sim.gameOver,
     winnerId: sim.winnerId,
+    barricadeDown: sim.barricadeDown,
     events: sim.events,
   };
 }
@@ -246,8 +306,9 @@ function dmgMulFor(p)  { return 1 + p.upgrades.dmg  * 0.15; }
 function rateMulFor(p) { return 1 - p.upgrades.rate * 0.10; }
 function reloadMulFor(p) { return 1 - p.upgrades.reload * 0.12; }
 
-function collideCircleWalls(x, y, r) {
-  for (const w of WALLS) {
+function collideCircleWalls(sim, x, y, r) {
+  const walls = currentWalls(sim);
+  for (const w of walls) {
     const nx = Math.max(w.x, Math.min(x, w.x + w.w));
     const ny = Math.max(w.y, Math.min(y, w.y + w.h));
     const dx = x - nx, dy = y - ny;
@@ -260,21 +321,22 @@ function collideCircleWalls(x, y, r) {
   return null;
 }
 
-function moveWithCollisions(ent, r, dx, dy) {
+function moveWithCollisions(sim, ent, r, dx, dy) {
   const ox = ent.x, oy = ent.y;
   ent.x += dx;
-  let h = collideCircleWalls(ent.x, ent.y, r);
+  let h = collideCircleWalls(sim, ent.x, ent.y, r);
   if (h) { ent.x += h.nx * h.depth; ent.y += h.ny * h.depth; }
   ent.y += dy;
-  h = collideCircleWalls(ent.x, ent.y, r);
+  h = collideCircleWalls(sim, ent.x, ent.y, r);
   if (h) { ent.x += h.nx * h.depth; ent.y += h.ny * h.depth; }
   ent.x = Math.max(r, Math.min(MAP_W - r, ent.x));
   ent.y = Math.max(r, Math.min(MAP_H - r, ent.y));
   return { dx: ent.x - ox, dy: ent.y - oy };
 }
 
-function lineHitsWall(x1, y1, x2, y2) {
-  for (const w of WALLS) {
+function lineHitsWall(sim, x1, y1, x2, y2) {
+  const walls = currentWalls(sim);
+  for (const w of walls) {
     if (segRectIntersect(x1, y1, x2, y2, w)) return true;
   }
   return false;
@@ -300,7 +362,8 @@ function segIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
 }
 
 function tryShoot(sim, p, input) {
-  const w = WEAPONS[p.weapon];
+  const w = weaponEff(p);
+  if (!w) return;
   // Charge weapons (RIPPLE) are driven by the hold/release state machine
   // in updateCharges — tryShoot is a no-op for them.
   if (w.kind === "charge") return;
@@ -342,6 +405,7 @@ function tryShoot(sim, p, input) {
   }
 
   const pellets = w.pellets || 1;
+  const packed = !!p.slotPacked[p.activeSlot];
   for (let i = 0; i < pellets; i++) {
     const angle = baseAngle + (Math.random() - 0.5) * w.spread * 2;
     sim.bullets.push({
@@ -352,18 +416,20 @@ function tryShoot(sim, p, input) {
       vy: Math.sin(angle) * w.proj,
       ownerId: p.id,
       weapon: p.weapon,
+      packed,
       dmg: w.dmg * dmgMulFor(p),
       range: w.range,
       traveled: 0,
     });
   }
   p.ammo -= 1;
+  p.slotAmmo[p.activeSlot] = p.ammo;
   if (p.ammo <= 0 && w.kind === "ranged") startReload(sim, p);
 }
 
 function startReload(sim, p) {
-  const w = WEAPONS[p.weapon];
-  if (w.kind === "melee") return;
+  const w = weaponEff(p);
+  if (!w || w.kind === "melee") return;
   if (p.ammo >= w.mag) return;
   if (sim.timeMs < p.reloadingUntil) return;
   const dur = w.reload * reloadMulFor(p);
@@ -374,7 +440,11 @@ function startReload(sim, p) {
 function finishReloads(sim) {
   for (const [, p] of sim.players) {
     if (p.reloadingUntil > 0 && sim.timeMs >= p.reloadingUntil) {
-      p.ammo = WEAPONS[p.weapon].mag;
+      const w = weaponEff(p);
+      if (w) {
+        p.ammo = w.mag;
+        p.slotAmmo[p.activeSlot] = p.ammo;
+      }
       p.reloadingUntil = 0;
       p.reloadDuration = 0;
     }
@@ -433,6 +503,8 @@ function onPlayerDeath(sim, target, attacker) {
     const idx = ARSENAL_ORDER.indexOf(attacker.weapon);
     const next = ARSENAL_ORDER[(idx + 1) % ARSENAL_ORDER.length];
     attacker.weapon = next;
+    attacker.slots[attacker.activeSlot] = next;
+    attacker.slotAmmo[attacker.activeSlot] = WEAPONS[next].mag;
     attacker.ammo = WEAPONS[next].mag;
     attacker.reloadingUntil = 0;
     if (attacker.arsenalKills.size >= ARSENAL_ORDER.length) {
@@ -475,7 +547,11 @@ function revivePlayer(sim, p, hp) {
   p.bleedOutAt = 0;
   p.downedAt = 0;
   p.reloadingUntil = 0;
-  p.ammo = WEAPONS[p.weapon].mag;
+  const w = weaponEff(p);
+  if (w) {
+    p.ammo = w.mag;
+    p.slotAmmo[p.activeSlot] = p.ammo;
+  }
   sim.events.push({ type: "revive", id: p.id });
 }
 
@@ -584,8 +660,13 @@ function detonateVoltFuse(sim, z, attacker, opts = {}) {
 // unhit zombie within chainRange, up to chainCount links. Each link does
 // dmg * chainDmgMul^link and pierces brute armor. Pushes a chainBolt
 // effect into sim.chainBolts for the renderer.
-function fireVoltspikeChain(sim, firstHit, baseDmg, attacker) {
-  const w = WEAPONS.voltspike;
+function fireVoltspikeChain(sim, firstHit, baseDmg, attacker, packed) {
+  const baseW = WEAPONS.voltspike;
+  const w = packed ? {
+    ...baseW,
+    chainCount: baseW.chainCount + 2,
+    chainRange: baseW.chainRange * 1.4,
+  } : baseW;
   const points = [{ x: firstHit.x, y: firstHit.y }];
   const hitSet = new Set([firstHit.id]);
   damageZombie(sim, firstHit, baseDmg, attacker, { pierceArmor: true });
@@ -615,7 +696,7 @@ function fireVoltspikeChain(sim, firstHit, baseDmg, attacker) {
 // minimum cancel without consuming a mag.
 function updateCharges(sim) {
   for (const [, p] of sim.players) {
-    const w = WEAPONS[p.weapon];
+    const w = weaponEff(p);
     if (!w || w.kind !== "charge") {
       if (p.chargingSince) p.chargingSince = 0;
       continue;
@@ -649,6 +730,7 @@ function updateCharges(sim) {
       const radius = w.range * ratio;
       emitSonicRing(sim, p, dmg, radius, w.staggerMs);
       p.ammo -= 1;
+      p.slotAmmo[p.activeSlot] = p.ammo;
       if (p.ammo <= 0) startReload(sim, p);
     }
   }
@@ -689,7 +771,11 @@ function respawnPlayer(sim, p) {
   p.downedAt = 0;
   p.bleedOutAt = 0;
   p.reviveProgress = 0;
-  p.ammo = WEAPONS[p.weapon].mag;
+  const w = weaponEff(p);
+  if (w) {
+    p.ammo = w.mag;
+    p.slotAmmo[p.activeSlot] = p.ammo;
+  }
   p.reloadingUntil = 0;
   sim.events.push({ type: "respawn", id: p.id });
 }
@@ -709,7 +795,7 @@ function updateBullets(sim, dt) {
     const nx = b.x + stepX;
     const ny = b.y + stepY;
 
-    if (lineHitsWall(b.x, b.y, nx, ny)) {
+    if (lineHitsWall(sim, b.x, b.y, nx, ny)) {
       if (b.weapon === "rocket") rocketExplode(sim, b.x, b.y, b);
       continue;
     }
@@ -736,7 +822,7 @@ function updateBullets(sim, dt) {
       if (b.weapon === "rocket") {
         rocketExplode(sim, nx, ny, b);
       } else if (b.weapon === "voltspike" && hit.zombie) {
-        fireVoltspikeChain(sim, hit.zombie, b.dmg, owner);
+        fireVoltspikeChain(sim, hit.zombie, b.dmg, owner, !!b.packed);
       } else if (hit.zombie) {
         damageZombie(sim, hit.zombie, b.dmg, owner, { fuseTipHit: !!hit.fuseTip });
       } else if (hit.player) {
@@ -757,7 +843,11 @@ function updateBullets(sim, dt) {
 }
 
 function rocketExplode(sim, x, y, b) {
-  const w = WEAPONS.rocket;
+  const baseW = WEAPONS.rocket;
+  const w = b.packed ? {
+    splashR: baseW.splashR * 1.4,
+    splashDmg: baseW.splashDmg * 2,
+  } : baseW;
   const owner = sim.players.get(b.ownerId);
   sim.explosions.push({ x, y, r: w.splashR, t: sim.timeMs });
   for (const z of [...sim.zombies]) {
@@ -822,12 +912,12 @@ function separateZombiesFromPlayers(sim) {
       const d2 = dx * dx + dy * dy;
       if (d2 >= min * min) continue;
       if (d2 === 0) {
-        moveWithCollisions(z, z.radius, 0.5, 0);
+        moveWithCollisions(sim, z, z.radius, 0.5, 0);
         continue;
       }
       const d = Math.sqrt(d2);
       const overlap = min - d;
-      moveWithCollisions(z, z.radius, (dx / d) * overlap, (dy / d) * overlap);
+      moveWithCollisions(sim, z, z.radius, (dx / d) * overlap, (dy / d) * overlap);
     }
   }
 }
@@ -850,7 +940,7 @@ function separateZombies(sim) {
       if (d2 >= min * min || d2 === 0) {
         if (d2 === 0) {
           // Identical position: nudge one to break the tie.
-          moveWithCollisions(b, b.radius, 0.5, 0);
+          moveWithCollisions(sim, b, b.radius, 0.5, 0);
         }
         continue;
       }
@@ -861,8 +951,8 @@ function separateZombies(sim) {
       const massA = a.radius, massB = b.radius;
       const shareA = massB / (massA + massB);
       const shareB = massA / (massA + massB);
-      moveWithCollisions(a, a.radius, -nx * overlap * shareA, -ny * overlap * shareA);
-      moveWithCollisions(b, b.radius,  nx * overlap * shareB,  ny * overlap * shareB);
+      moveWithCollisions(sim, a, a.radius, -nx * overlap * shareA, -ny * overlap * shareA);
+      moveWithCollisions(sim, b, b.radius,  nx * overlap * shareB,  ny * overlap * shareB);
     }
   }
 }
@@ -913,14 +1003,14 @@ function updateZombies(sim, dt) {
     if (sim.timeMs < z.detourUntil) ang = baseAng + z.detourDir;
     const dx = Math.cos(ang) * z.speed * dt;
     const dy = Math.sin(ang) * z.speed * dt;
-    const moved = moveWithCollisions(z, z.radius, dx, dy);
+    const moved = moveWithCollisions(sim, z, z.radius, dx, dy);
 
     const expected = z.speed * dt;
     const actual = Math.hypot(moved.dx, moved.dy);
     if (expected > 0.001 && actual < expected * 0.4) {
       z.stuckMs += dt * 1000;
       if (z.stuckMs > 120 && sim.timeMs >= z.detourUntil) {
-        const side = pickDetourSide(z, z.radius, baseAng);
+        const side = pickDetourSide(sim, z, z.radius, baseAng);
         z.detourDir = side * (Math.PI / 2);
         z.detourUntil = sim.timeMs + 350 + Math.random() * 300;
       }
@@ -934,7 +1024,7 @@ function updateZombies(sim, dt) {
       if (z.kind === "brute" && target.state === "alive") {
         const ddx = target.x - z.x, ddy = target.y - z.y;
         const m = Math.hypot(ddx, ddy) || 1;
-        moveWithCollisions(target, PLAYER_R, (ddx / m) * BRUTE_SHOVE, (ddy / m) * BRUTE_SHOVE);
+        moveWithCollisions(sim, target, PLAYER_R, (ddx / m) * BRUTE_SHOVE, (ddy / m) * BRUTE_SHOVE);
       }
     }
   }
@@ -942,7 +1032,7 @@ function updateZombies(sim, dt) {
   separateZombiesFromPlayers(sim);
 }
 
-// Picks a random spawn point along the map perimeter. Tries to avoid
+// Picks a random spawn point along room 1's perimeter. Tries to avoid
 // landing on a wall (with a small margin) by retrying; falls back to
 // the curated ZOMBIE_SPAWNS list if every random pick is blocked.
 function pickZombieSpawn(sim) {
@@ -951,11 +1041,11 @@ function pickZombieSpawn(sim) {
   for (let attempt = 0; attempt < 16; attempt++) {
     const side = Math.floor(Math.random() * 4);
     let x, y;
-    if (side === 0) { x = margin + Math.random() * (MAP_W - margin * 2); y = margin; }
-    else if (side === 1) { x = MAP_W - margin; y = margin + Math.random() * (MAP_H - margin * 2); }
-    else if (side === 2) { x = margin + Math.random() * (MAP_W - margin * 2); y = MAP_H - margin; }
+    if (side === 0) { x = margin + Math.random() * (ROOM1_W - margin * 2); y = margin; }
+    else if (side === 1) { x = ROOM1_W - margin; y = margin + Math.random() * (MAP_H - margin * 2); }
+    else if (side === 2) { x = margin + Math.random() * (ROOM1_W - margin * 2); y = MAP_H - margin; }
     else { x = margin; y = margin + Math.random() * (MAP_H - margin * 2); }
-    if (collideCircleWalls(x, y, ZOMBIE_R)) continue;
+    if (collideCircleWalls(sim, x, y, ZOMBIE_R)) continue;
     let tooClose = false;
     for (const [, p] of sim.players) {
       if (p.state !== "alive") continue;
@@ -967,7 +1057,7 @@ function pickZombieSpawn(sim) {
   return ZOMBIE_SPAWNS[Math.floor(Math.random() * ZOMBIE_SPAWNS.length)];
 }
 
-function pickDetourSide(ent, r, baseAng) {
+function pickDetourSide(sim, ent, r, baseAng) {
   const probe = r * 1.6;
   const leftAng = baseAng - Math.PI / 2;
   const rightAng = baseAng + Math.PI / 2;
@@ -975,8 +1065,8 @@ function pickDetourSide(ent, r, baseAng) {
   const ly = ent.y + Math.sin(leftAng) * probe;
   const rx = ent.x + Math.cos(rightAng) * probe;
   const ry = ent.y + Math.sin(rightAng) * probe;
-  const leftBlocked = collideCircleWalls(lx, ly, r) != null;
-  const rightBlocked = collideCircleWalls(rx, ry, r) != null;
+  const leftBlocked = collideCircleWalls(sim, lx, ly, r) != null;
+  const rightBlocked = collideCircleWalls(sim, rx, ry, r) != null;
   if (leftBlocked && !rightBlocked) return 1;
   if (rightBlocked && !leftBlocked) return -1;
   return Math.random() < 0.5 ? -1 : 1;
@@ -1078,10 +1168,10 @@ function updateBots(sim, dt) {
       }
     }
 
-    const w = WEAPONS[p.weapon];
-    const desiredBase = w.kind === "melee" ? 38 : 220;
+    const w = weaponEff(p);
+    const desiredBase = w?.kind === "melee" ? 38 : 220;
     const desiredJitter = (bot.jitterSeed % 100) * 1.2;
-    const desired = desiredBase + (w.kind === "melee" ? 0 : desiredJitter);
+    const desired = desiredBase + (w?.kind === "melee" ? 0 : desiredJitter);
 
     let mx = 0, my = 0;
     if (target) {
@@ -1105,7 +1195,7 @@ function updateBots(sim, dt) {
       bot.stuckMs += dt * 1000;
       if (bot.stuckMs > 120 && sim.timeMs >= bot.detourUntil) {
         const baseAng = Math.atan2(target.y - p.y, target.x - p.x);
-        const side = pickDetourSide(p, PLAYER_R, baseAng);
+        const side = pickDetourSide(sim, p, PLAYER_R, baseAng);
         bot.detourDir = side * (Math.PI / 2);
         bot.detourUntil = sim.timeMs + 400 + Math.random() * 400;
       }
@@ -1115,10 +1205,10 @@ function updateBots(sim, dt) {
     bot.lastX = p.x; bot.lastY = p.y;
 
     const reloading = sim.timeMs < p.reloadingUntil;
-    const shootClear = target ? !lineHitsWall(p.x, p.y, target.x, target.y) : false;
+    const shootClear = target ? !lineHitsWall(sim, p.x, p.y, target.x, target.y) : false;
     const inFiringWindow = !!target && best < 500 && shootClear;
     const wantReload =
-      w.kind !== "melee" &&
+      w && w.kind !== "melee" &&
       !reloading &&
       p.ammo < w.mag &&
       (p.ammo === 0 || !inFiringWindow || p.ammo / w.mag <= 0.34);
@@ -1127,7 +1217,7 @@ function updateBots(sim, dt) {
       mx, my,
       aimX: target ? target.x : p.x + 10,
       aimY: target ? target.y : p.y,
-      shoot: inFiringWindow && !reloading && (w.kind === "melee" || p.ammo > 0),
+      shoot: inFiringWindow && !reloading && (w?.kind === "melee" || p.ammo > 0),
       reload: wantReload,
     };
     sim.inputs.set(p.id, input);
@@ -1137,12 +1227,15 @@ function updateBots(sim, dt) {
 function updatePlayers(sim, dt) {
   for (const [, p] of sim.players) {
     if (!p.alive) continue;
+    // While the crate animation is playing the player is locked into the
+    // result reveal — no shooting/reload/moving inputs apply.
+    if (p.crateOpenedAt) continue;
     const input = sim.inputs.get(p.id);
     if (!input) continue;
     const speed = moveSpeedFor(p);
     const dx = input.mx * speed * dt;
     const dy = input.my * speed * dt;
-    moveWithCollisions(p, PLAYER_R, dx, dy);
+    moveWithCollisions(sim, p, PLAYER_R, dx, dy);
     p.angle = Math.atan2(input.aimY - p.y, input.aimX - p.x);
     if (input.reload) startReload(sim, p);
     if (input.shoot) tryShoot(sim, p, input);
@@ -1155,6 +1248,139 @@ function pruneExplosions(sim) {
   sim.sonicRings = sim.sonicRings.filter((r) => sim.timeMs - r.t < r.duration);
 }
 
+// ───────────────────────── Interactions ─────────────────────────
+
+function rectCenter(r) { return { x: r.x + r.w / 2, y: r.y + r.h / 2 }; }
+
+function nearPoint(p, cx, cy, range) {
+  return Math.hypot(p.x - cx, p.y - cy) <= range;
+}
+
+function pickInteractTarget(sim, p) {
+  // Priority: closest among in-range props. Barricade is only interactable
+  // while up; PaP only interactable from inside room 2 (which requires the
+  // barricade to be down or the player to be standing in the doorway).
+  const candidates = [];
+  const c = rectCenter(CRATE);
+  if (nearPoint(p, c.x, c.y, INTERACT_RANGE)) candidates.push({ kind: "crate", d: Math.hypot(p.x - c.x, p.y - c.y) });
+  const pp = rectCenter(PAP);
+  if (nearPoint(p, pp.x, pp.y, INTERACT_RANGE)) candidates.push({ kind: "pap", d: Math.hypot(p.x - pp.x, p.y - pp.y) });
+  if (!sim.barricadeDown) {
+    const b = rectCenter(BARRICADE);
+    if (nearPoint(p, b.x, b.y, INTERACT_RANGE)) candidates.push({ kind: "barricade", d: Math.hypot(p.x - b.x, p.y - b.y) });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.d - b.d);
+  return candidates[0].kind;
+}
+
+function grantWeaponToActiveOrEmpty(sim, p, weaponId) {
+  // If the player has an empty slot, fill it (and switch to it). Otherwise
+  // replace the active slot.
+  let slot = p.slots.findIndex((s) => s == null);
+  if (slot < 0) slot = p.activeSlot;
+  p.slots[slot] = weaponId;
+  p.slotAmmo[slot] = WEAPONS[weaponId].mag;
+  p.slotPacked[slot] = false;
+  p.activeSlot = slot;
+  syncActiveWeapon(p);
+  p.reloadingUntil = 0;
+  p.reloadDuration = 0;
+  p.chargingSince = 0;
+}
+
+function openCrate(sim, p) {
+  if (p.crateOpenedAt) return;
+  if (p.cash < CRATE_COST) return;
+  p.cash -= CRATE_COST;
+  const roll = Math.random();
+  let result = null;
+  let blowUp = false;
+  if (roll < CRATE_BLOWUP_CHANCE) {
+    blowUp = true;
+  } else if (roll < CRATE_BLOWUP_CHANCE + CRATE_VOLT_CHANCE) {
+    result = "voltspike";
+  } else if (roll < CRATE_BLOWUP_CHANCE + CRATE_VOLT_CHANCE + CRATE_RIPPLE_CHANCE) {
+    result = "ripple";
+  } else {
+    result = CRATE_NORMAL_POOL[Math.floor(Math.random() * CRATE_NORMAL_POOL.length)];
+  }
+  p.crateOpenedAt = sim.timeMs;
+  p.crateResult = result;
+  p.crateBlowUp = blowUp;
+  // Force-stop firing/charging while the player watches the reveal.
+  p.reloadingUntil = 0;
+  p.chargingSince = 0;
+  sim.events.push({
+    type: "crate-open",
+    playerId: p.id, result, blowUp,
+    durationMs: CRATE_ANIM_MS,
+  });
+}
+
+function buyBarricade(sim, p) {
+  if (sim.barricadeDown) return;
+  if (p.cash < BARRICADE_COST) return;
+  p.cash -= BARRICADE_COST;
+  sim.barricadeDown = true;
+  rebuildNav(sim);
+  sim.events.push({ type: "barricade", playerId: p.id });
+}
+
+function packCurrentWeapon(sim, p) {
+  if (sim.wave < PAP_MIN_WAVE) return;
+  if (p.cash < PAP_COST) return;
+  const id = p.slots[p.activeSlot];
+  if (!id) return;
+  if (p.slotPacked[p.activeSlot]) return;
+  p.cash -= PAP_COST;
+  p.slotPacked[p.activeSlot] = true;
+  // Top off ammo so the buff is immediately felt.
+  const w = weaponEff(p);
+  if (w) {
+    p.ammo = w.mag;
+    p.slotAmmo[p.activeSlot] = p.ammo;
+  }
+  sim.events.push({ type: "pap", playerId: p.id, weapon: id });
+}
+
+function updateInteractions(sim) {
+  for (const [, p] of sim.players) {
+    if (p.state !== "alive") continue;
+    if (p.crateOpenedAt) continue;
+    const input = sim.inputs.get(p.id);
+    if (!input?.interact) continue;
+    const target = pickInteractTarget(sim, p);
+    if (target === "crate") openCrate(sim, p);
+    else if (target === "barricade") buyBarricade(sim, p);
+    else if (target === "pap") packCurrentWeapon(sim, p);
+    // Consume the edge so subsequent ticks (which may still see the same
+    // input snapshot before a new one arrives from the network) don't keep
+    // re-triggering interactions.
+    input.interact = false;
+  }
+}
+
+function updateCrateAnims(sim) {
+  for (const [, p] of sim.players) {
+    if (!p.crateOpenedAt) continue;
+    if (sim.timeMs - p.crateOpenedAt < CRATE_ANIM_MS) continue;
+    // Apply result.
+    if (p.crateBlowUp) {
+      damagePlayer(sim, p, CRATE_BLOW_UP_DMG, null);
+      sim.events.push({ type: "crate-blowup", playerId: p.id });
+    } else if (p.crateResult) {
+      grantWeaponToActiveOrEmpty(sim, p, p.crateResult);
+      sim.events.push({ type: "crate-grant", playerId: p.id, weapon: p.crateResult });
+    }
+    p.crateOpenedAt = 0;
+    p.crateResult = null;
+    p.crateBlowUp = false;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────
+
 export function step(sim, dt) {
   sim.timeMs += dt * 1000;
   sim.tick += 1;
@@ -1165,6 +1391,8 @@ export function step(sim, dt) {
   // leaving the player stuck reloading forever under autofire.
   finishReloads(sim);
   updateBots(sim, dt);
+  updateInteractions(sim);
+  updateCrateAnims(sim);
   updatePlayers(sim, dt);
   updateCharges(sim);
   updateBullets(sim, dt);
@@ -1196,14 +1424,11 @@ export function setReady(sim, playerId, value) {
   p.ready = !!value;
 }
 
+function hasWeaponInSlots(p, weaponId) {
+  return p.slots.some((s) => s === weaponId);
+}
+
 export const SHOP_ITEMS = [
-  { id: "buy-shotgun", name: "SHOTGUN",      desc: "Buy weapon.",                cost: () => 1000, canBuy: (p) => !p.inventory.shotgun, apply: (p) => { p.inventory.shotgun = true; p.weapon = "shotgun"; p.ammo = WEAPONS.shotgun.mag; } },
-  { id: "buy-smg",     name: "SMG",          desc: "Buy weapon.",                cost: () => 1500, canBuy: (p) => !p.inventory.smg,     apply: (p) => { p.inventory.smg = true; p.weapon = "smg"; p.ammo = WEAPONS.smg.mag; } },
-  { id: "buy-sniper",  name: "SNIPER",       desc: "Buy weapon.",                cost: () => 2500, canBuy: (p) => !p.inventory.sniper,  apply: (p) => { p.inventory.sniper = true; p.weapon = "sniper"; p.ammo = WEAPONS.sniper.mag; } },
-  { id: "buy-rocket",  name: "ROCKET",       desc: "Buy weapon.",                cost: () => 4000, canBuy: (p) => !p.inventory.rocket,  apply: (p) => { p.inventory.rocket = true; p.weapon = "rocket"; p.ammo = WEAPONS.rocket.mag; } },
-  { id: "buy-knife",   name: "KNIFE",        desc: "Buy weapon.",                cost: () => 200,  canBuy: (p) => !p.inventory.knife,   apply: (p) => { p.inventory.knife = true; } },
-  { id: "buy-voltspike", name: "VOLTSPIKE", desc: "Buy weapon.",                cost: () => 10000, canBuy: (p) => !p.inventory.voltspike, apply: (p) => { p.inventory.voltspike = true; p.weapon = "voltspike"; p.ammo = WEAPONS.voltspike.mag; } },
-  { id: "buy-ripple",    name: "RIPPLE",    desc: "Buy weapon.",                cost: () => 10000, canBuy: (p) => !p.inventory.ripple,    apply: (p) => { p.inventory.ripple = true; p.weapon = "ripple"; p.ammo = WEAPONS.ripple.mag; } },
   { id: "upg-dmg",     name: "+DAMAGE",      desc: "+15% damage per tier.",     cost: (p) => 400 + p.upgrades.dmg * 300, canBuy: (p) => p.upgrades.dmg < 5, apply: (p) => p.upgrades.dmg += 1 },
   { id: "upg-rate",    name: "+FIRE RATE",   desc: "-10% delay per tier.",      cost: (p) => 500 + p.upgrades.rate * 300, canBuy: (p) => p.upgrades.rate < 5, apply: (p) => p.upgrades.rate += 1 },
   { id: "upg-reload",  name: "+RELOAD",      desc: "-12% reload per tier.",     cost: (p) => 400 + p.upgrades.reload * 200, canBuy: (p) => p.upgrades.reload < 5, apply: (p) => p.upgrades.reload += 1 },
@@ -1219,12 +1444,31 @@ export const SHOP_ITEMS = [
     } },
 ];
 
+// Switch to one of the player's two slots by index (0 or 1). If the slot is
+// empty, no-op. Ammo for the new slot resumes from where it was left off.
+export function switchWeaponSlot(sim, playerId, slot) {
+  const p = sim.players.get(playerId);
+  if (!p) return;
+  if (slot !== 0 && slot !== 1) return;
+  if (p.activeSlot === slot) return;
+  if (!p.slots[slot]) return;
+  // Persist current slot's ammo before switching.
+  p.slotAmmo[p.activeSlot] = p.ammo;
+  p.activeSlot = slot;
+  syncActiveWeapon(p);
+  p.reloadingUntil = 0;
+  p.reloadDuration = 0;
+  p.chargingSince = 0;
+}
+
+// Backwards-compatible entry point taking a weapon id. If the weapon is in
+// one of the player's slots, switch to that slot.
 export function switchWeapon(sim, playerId, weaponId) {
   const p = sim.players.get(playerId);
-  if (!p || !p.inventory[weaponId]) return;
-  p.weapon = weaponId;
-  p.ammo = WEAPONS[weaponId].mag;
-  p.reloadingUntil = 0;
+  if (!p) return;
+  const slot = p.slots.findIndex((s) => s === weaponId);
+  if (slot < 0) return;
+  switchWeaponSlot(sim, playerId, slot);
 }
 
 export function reloadPlayer(sim, playerId) {

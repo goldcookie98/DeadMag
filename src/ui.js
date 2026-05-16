@@ -223,7 +223,7 @@ export class UI {
     this.el.lobbyStart.classList.toggle("disabled", !canStart);
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs, hp, maxHp, armor, score, aliveMs, zombiesLeft, inventory, squad, ping }) {
+  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs, hp, maxHp, armor, score, aliveMs, zombiesLeft, slots, activeSlot, slotAmmo, slotPacked, crate, squad, ping }) {
     this._setStatusOverlay(playerState, bleedLeftMs, reviveProgressMs);
 
     this.el.mode.textContent = mode ? mode.toUpperCase() : "—";
@@ -294,22 +294,97 @@ export class UI {
       if (this.el.reloadBar) this.el.reloadBar.style.width = `${reloading ? pct : 0}%`;
     }
 
-    this._renderInventory(inventory || {}, weapon);
+    this._renderInventory(slots || ["pistol", null], activeSlot ?? 0, slotAmmo || [0, 0], slotPacked || [false, false]);
     this._renderSquadHud(squad || []);
+    this._renderCrateOverlay(crate || null);
   }
 
-  _renderInventory(inventory, activeWeapon) {
+  _renderInventory(slots, activeSlot, slotAmmo, slotPacked) {
     if (!this.el.invGrid) return;
-    const sig = JSON.stringify({ inv: inventory, w: activeWeapon });
+    const sig = JSON.stringify({ s: slots, a: activeSlot, am: slotAmmo, p: slotPacked });
     if (this._invSig === sig) return;
     this._invSig = sig;
-    const cells = ARSENAL_ORDER.map((wid, i) => {
-      const owned = !!inventory[wid] || wid === "pistol";
-      const active = wid === activeWeapon;
-      const cls = "inv-cell" + (active ? " active" : owned ? " owned" : "");
-      return `<div class="${cls}"><span class="inv-slot">${i + 1}</span><span class="inv-art">${WEAPON_SVG[wid] || ""}</span></div>`;
+    const cells = [0, 1].map((i) => {
+      const wid = slots[i];
+      const active = i === activeSlot && !!wid;
+      const empty = !wid;
+      const packed = !!slotPacked[i];
+      const cls = "inv-cell" + (active ? " active" : empty ? " empty" : " owned") + (packed ? " packed" : "");
+      const art = wid
+        ? `<span class="inv-art">${WEAPON_SVG[wid] || ""}</span>`
+        : `<span class="inv-empty-mark">EMPTY</span>`;
+      const name = wid ? `<span class="inv-name">${WEAPONS[wid]?.name || wid.toUpperCase()}${packed ? "+" : ""}</span>` : "";
+      return `<div class="${cls}"><span class="inv-slot">${i + 1}</span>${art}${name}</div>`;
     });
     this.el.invGrid.innerHTML = cells.join("");
+  }
+
+  _renderCrateOverlay(crate) {
+    let el = document.getElementById("crate-overlay");
+    if (!crate) {
+      if (el) el.style.display = "none";
+      this._crateAnimTarget = null;
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "crate-overlay";
+      el.innerHTML = `
+        <div class="crate-overlay-inner">
+          <div class="crate-tag">// SUPPLY CRATE</div>
+          <div class="crate-window">
+            <div class="crate-strip" id="crate-strip"></div>
+            <div class="crate-pointer"></div>
+          </div>
+          <div class="crate-status" id="crate-status">OPENING…</div>
+        </div>`;
+      document.body.appendChild(el);
+    }
+    el.style.display = "flex";
+    const elapsed = Math.max(0, (crate.timeMs ?? 0) - crate.openedAt);
+    const total = crate.durationMs || 3500;
+    const ratio = Math.max(0, Math.min(1, elapsed / total));
+    const reveal = ratio >= 1;
+    // Rebuild the strip once per open.
+    if (this._crateAnimTarget !== crate.openedAt) {
+      this._crateAnimTarget = crate.openedAt;
+      const strip = el.querySelector("#crate-strip");
+      const pool = ["pistol", "shotgun", "smg", "sniper", "rocket", "knife", "voltspike", "ripple"];
+      // 40 slots; the target lands at index 34 (so the strip slides ~85% across).
+      const items = [];
+      const targetIdx = 34;
+      for (let i = 0; i < 40; i++) {
+        let wid;
+        if (i === targetIdx) wid = crate.blowUp ? "BLOWUP" : (crate.result || "pistol");
+        else wid = pool[Math.floor(Math.random() * pool.length)];
+        items.push(wid);
+      }
+      strip.dataset.targetIdx = String(targetIdx);
+      strip.innerHTML = items.map((wid) => {
+        if (wid === "BLOWUP") {
+          return `<div class="crate-cell danger"><div class="crate-cell-art">⚠</div><div class="crate-cell-name">BOOM</div></div>`;
+        }
+        return `<div class="crate-cell"><div class="crate-cell-art">${WEAPON_SVG[wid] || ""}</div><div class="crate-cell-name">${WEAPONS[wid]?.name || wid}</div></div>`;
+      }).join("");
+    }
+    const strip = el.querySelector("#crate-strip");
+    const status = el.querySelector("#crate-status");
+    const cellW = 130; // matches CSS
+    const targetIdx = parseInt(strip.dataset.targetIdx || "34", 10);
+    const finalOffset = targetIdx * cellW;
+    // Ease-out cubic for the slide.
+    const eased = 1 - Math.pow(1 - ratio, 3);
+    const offset = eased * finalOffset;
+    strip.style.transform = `translateX(${-offset}px)`;
+    if (status) {
+      if (reveal) {
+        if (crate.blowUp) { status.textContent = "BOOBY TRAP!"; status.className = "crate-status danger"; }
+        else if (crate.result) { status.textContent = `${WEAPONS[crate.result]?.name || crate.result.toUpperCase()} ACQUIRED`; status.className = "crate-status ok"; }
+      } else {
+        status.textContent = "OPENING…";
+        status.className = "crate-status";
+      }
+    }
   }
 
   _renderSquadHud(squad) {
@@ -372,8 +447,8 @@ export class UI {
     this.el.shopTimer.textContent = secs;
     this.el.shopTimer.classList.toggle("urgent", secs <= 5);
 
-    const ownedWeapons = Object.keys(player.inventory);
-    const arsenal = ARSENAL_ORDER.filter((w) => ownedWeapons.includes(w) || w === "pistol");
+    const ownedWeapons = (player.slots || []).filter(Boolean);
+    const arsenal = ownedWeapons.length ? ownedWeapons : ["pistol"];
 
     if (sim) {
       const alive = [...sim.players.values()].filter((p) => p.state === "alive");
@@ -401,7 +476,8 @@ export class UI {
 
     const sig = JSON.stringify({
       cash: player.cash,
-      inv: ownedWeapons.sort(),
+      inv: [...ownedWeapons].sort(),
+      packed: player.slotPacked || [],
       upg: player.upgrades,
       armor: player.armor,
       hp: player.hp,
@@ -425,9 +501,11 @@ export class UI {
     if (this.el.shopEquip) {
       this.el.shopEquip.innerHTML = arsenal.map((wid) => {
         const eq = player.weapon === wid;
+        const slotIdx = (player.slots || []).findIndex((s) => s === wid);
+        const packed = slotIdx >= 0 && !!(player.slotPacked || [])[slotIdx];
         return `<button class="equip-card ${eq ? "active" : ""}" data-equip="${wid}">
   <span class="equip-card-art">${WEAPON_SVG[wid] || ""}</span>
-  <span class="equip-card-name">${WEAPONS[wid].name}</span>
+  <span class="equip-card-name">${WEAPONS[wid].name}${packed ? " +" : ""}</span>
 </button>`;
       }).join("");
       this.el.shopEquip.querySelectorAll("[data-equip]").forEach((b) => {
@@ -446,30 +524,10 @@ export class UI {
   }
 
   _buildShopSections(player, items) {
-    const weaponIds = ["buy-shotgun", "buy-smg", "buy-sniper", "buy-rocket", "buy-knife", "buy-voltspike", "buy-ripple"];
     const upgradeIds = ["upg-dmg", "upg-rate", "upg-reload", "upg-speed"];
     const supplyIds = ["heal", "armor", "life", "revive"];
 
-    const weaponMap = new Map([
-      ["buy-shotgun", "shotgun"], ["buy-smg", "smg"], ["buy-sniper", "sniper"], ["buy-rocket", "rocket"], ["buy-knife", "knife"],
-      ["buy-voltspike", "voltspike"], ["buy-ripple", "ripple"],
-    ]);
-
     const byId = new Map(items.map((e) => [e.it.id, e]));
-
-    const weaponCards = weaponIds.map((id) => {
-      const e = byId.get(id); if (!e) return "";
-      const wid = weaponMap.get(id);
-      const w = WEAPONS[wid];
-      const stat = w.kind === "melee" ? `${w.dmg} DMG · ${w.range} REACH` : `${w.dmg} DMG · ${w.mag} MAG · ${w.range} RANGE`;
-      const owned = !!player.inventory[wid];
-      const disabled = !e.afford || owned;
-      return `<div class="shop-card ${disabled ? "disabled" : ""}" data-buy="${id}">
-  <div class="shop-card-head"><div class="shop-card-name">${e.it.name}</div><div class="shop-card-cost">$${e.cost.toLocaleString()}</div></div>
-  <div class="shop-card-art">${WEAPON_SVG[wid] || ""}</div>
-  <div class="shop-card-desc">${stat}${owned ? " · OWNED" : ""}</div>
-</div>`;
-    }).join("");
 
     const upgradeCards = upgradeIds.map((id) => {
       const e = byId.get(id); if (!e) return "";
@@ -498,8 +556,12 @@ export class UI {
 </div>`;
     }).join("");
 
-    return `<div class="shop-section-head" style="color:var(--magenta)">// WEAPONS</div>
-<div class="shop-weapons-grid">${weaponCards}</div>
+    return `<div class="shop-section-head" style="color:var(--magenta)">// PROPS · IN MAP</div>
+<div class="shop-props-grid">
+  <div class="shop-prop"><div class="shop-prop-name">SUPPLY CRATE</div><div class="shop-prop-cost">$950</div><div class="shop-prop-desc">Random weapon · 10% boom · Walk up & press F.</div></div>
+  <div class="shop-prop"><div class="shop-prop-name">BARRICADE</div><div class="shop-prop-cost">$1,000</div><div class="shop-prop-desc">Unlocks room 2. One-time purchase.</div></div>
+  <div class="shop-prop"><div class="shop-prop-name">PACK-A-PUNCH</div><div class="shop-prop-cost">$10,000</div><div class="shop-prop-desc">Wave 5+. Doubles damage / mag / range / rate.</div></div>
+</div>
 <div class="shop-section-head">// UPGRADES</div>
 <div class="shop-upgrades-grid">${upgradeCards}</div>
 <div class="shop-section-head" style="color:var(--cyan)">// SUPPLIES</div>

@@ -1,6 +1,6 @@
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
-import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, setReady } from "./sim.js";
+import { createSim, addPlayer, setInput, step, shopBuy, switchWeapon, switchWeaponSlot, setReady } from "./sim.js";
 import { render, recordMuzzleFlash, recordHit } from "./render.js";
 import { UI } from "./ui.js";
 import { Mp, getSavedServerUrl, setServerUrl } from "./mp.js";
@@ -592,20 +592,22 @@ function frame(now) {
       if (_lastSeenWeapon != null) _prevWeapon = _lastSeenWeapon;
       _lastSeenWeapon = me.weapon;
     }
+    // Digits 1/2 select the two inventory slots directly. Empty slot = no-op.
     const slot = input.consumeWeaponSlot();
-    if (slot >= 0 && slot < ARSENAL_ORDER.length) {
-      const wid = ARSENAL_ORDER[slot];
-      const owned = wid === "pistol" || !!me?.inventory?.[wid];
-      if (me && me.state === "alive" && owned && me.weapon !== wid) {
+    if (slot === 0 || slot === 1) {
+      if (me && me.state === "alive" && me.slots?.[slot] && me.activeSlot !== slot) {
+        const wid = me.slots[slot];
         if (mp) mp.sendEquip(wid);
-        else switchWeapon(sim, localId, wid);
+        else switchWeaponSlot(sim, localId, slot);
       }
     }
-    if (input.consumeQuickSwap() && me && me.state === "alive" && _prevWeapon && _prevWeapon !== me.weapon) {
-      const owned = _prevWeapon === "pistol" || !!me.inventory?.[_prevWeapon];
-      if (owned) {
-        if (mp) mp.sendEquip(_prevWeapon);
-        else switchWeapon(sim, localId, _prevWeapon);
+    // Q swaps to the other slot (if both are filled).
+    if (input.consumeQuickSwap() && me && me.state === "alive" && me.slots) {
+      const other = me.activeSlot === 0 ? 1 : 0;
+      if (me.slots[other]) {
+        const wid = me.slots[other];
+        if (mp) mp.sendEquip(wid);
+        else switchWeaponSlot(sim, localId, other);
       }
     }
     const online = !!mp;
@@ -617,11 +619,12 @@ function frame(now) {
       processEvents(sim);
     } else {
       const nowSend = performance.now();
-      // Bypass throttle on action-edges (click, reload tap) so the server
-      // sees the press before the next interval window.
-      const shootEdge  = snap.shoot  && !_lastSentShoot;
-      const reloadEdge = snap.reload && !_lastSentReload;
-      const edge = shootEdge || reloadEdge;
+      // Bypass throttle on action-edges (click, reload tap, interact press)
+      // so the server sees the press before the next interval window.
+      const shootEdge    = snap.shoot && !_lastSentShoot;
+      const reloadEdge   = snap.reload && !_lastSentReload;
+      const interactEdge = !!snap.interact;
+      const edge = shootEdge || reloadEdge || interactEdge;
       if (edge || nowSend - _lastInputSendAt >= INPUT_SEND_INTERVAL_MS) {
         mp.sendInput(snap);
         _lastInputSendAt = nowSend;
@@ -778,7 +781,13 @@ function updateHUD() {
     score: me.score,
     aliveMs: sim.timeMs ?? 0,
     zombiesLeft: sim.zombies?.length ?? 0,
-    inventory: me.inventory || {},
+    slots: me.slots || ["pistol", null],
+    activeSlot: me.activeSlot ?? 0,
+    slotAmmo: me.slotAmmo || [0, 0],
+    slotPacked: me.slotPacked || [false, false],
+    crate: me.crateOpenedAt
+      ? { openedAt: me.crateOpenedAt, result: me.crateResult, blowUp: me.crateBlowUp, durationMs: 3500, timeMs: sim.timeMs }
+      : null,
     squad,
     ping: null,
   });

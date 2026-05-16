@@ -693,26 +693,108 @@ html, body {
 #hud-reload.active { border-color: var(--yellow); }
 #hud-reload-bar { height: 100%; width: 0%; background: var(--yellow); box-shadow: 0 0 8px rgba(255,224,62,0.6); }
 
-/* Inventory strip */
-#hud-inventory { position: absolute; bottom: 20px; right: 24px; width: 300px; }
+/* Inventory strip — two slots */
+#hud-inventory { position: absolute; bottom: 20px; right: 24px; width: 280px; }
 .inv-head { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: 0.3em; color: var(--dim); margin-bottom: 6px; }
 .inv-tag { color: var(--cyan); }
-#hud-inv-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+#hud-inv-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 .inv-cell {
-  height: 50px;
+  height: 78px;
   position: relative;
   border: 2px solid var(--dim2);
   background: rgba(8,2,15,0.93);
-  opacity: 0.35;
-  display: flex; align-items: center; justify-content: center;
-  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+  opacity: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  padding: 4px 4px 6px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
 }
-.inv-cell.owned { background: rgba(21,7,40,0.67); opacity: 1; }
+.inv-cell.empty { opacity: 0.45; }
+.inv-cell.owned { background: rgba(21,7,40,0.67); }
 .inv-cell.active { border-color: var(--cyan); background: rgba(46,255,229,0.13); box-shadow: 0 0 16px -2px rgba(46,255,229,0.65); }
-.inv-cell .inv-slot { position: absolute; top: 2px; left: 4px; font-family: var(--display); font-size: 11px; color: var(--dim); letter-spacing: 0.05em; }
+.inv-cell.packed { border-color: var(--acid); box-shadow: 0 0 16px -2px rgba(182,255,46,0.65); }
+.inv-cell.active.packed { border-color: var(--acid); }
+.inv-cell .inv-slot { position: absolute; top: 3px; left: 6px; font-family: var(--display); font-size: 12px; color: var(--dim); letter-spacing: 0.05em; }
 .inv-cell.active .inv-slot { color: var(--cyan); }
-.inv-cell .inv-art { width: 80%; height: 60%; }
+.inv-cell.packed .inv-slot { color: var(--acid); }
+.inv-cell .inv-art { width: 92%; height: 38px; display: flex; align-items: center; justify-content: center; margin-top: auto; }
 .inv-cell .inv-art svg { width: 100%; height: 100%; }
+.inv-cell .inv-name { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; color: var(--fg); margin-top: 2px; }
+.inv-cell.active .inv-name { color: var(--cyan); }
+.inv-cell.packed .inv-name { color: var(--acid); text-shadow: 0 0 6px rgba(182,255,46,0.5); }
+.inv-cell .inv-empty-mark { font-family: var(--mono); font-size: 11px; letter-spacing: 0.3em; color: var(--dim2); }
+
+/* CS:GO-style crate overlay */
+#crate-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8,2,15,0.78);
+  z-index: 30;
+  pointer-events: none;
+  font-family: var(--mono);
+}
+.crate-overlay-inner {
+  width: min(780px, 92vw);
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 14px;
+  background: rgba(21,7,40,0.95);
+  border: 2px solid var(--yellow);
+  padding: 24px 28px;
+  box-shadow: 0 0 60px rgba(255,224,62,0.25);
+}
+.crate-tag { font-size: 11px; letter-spacing: 0.35em; color: var(--yellow); text-shadow: 0 0 8px rgba(255,224,62,0.6); }
+.crate-window {
+  position: relative;
+  overflow: hidden;
+  height: 110px;
+  border-top: 1px solid var(--dim2);
+  border-bottom: 1px solid var(--dim2);
+  background: rgba(8,2,15,0.9);
+}
+.crate-strip {
+  position: absolute;
+  top: 0; left: 50%;
+  display: flex;
+  height: 110px;
+  will-change: transform;
+}
+.crate-cell {
+  width: 130px;
+  height: 110px;
+  flex: 0 0 130px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px;
+  border-right: 1px solid rgba(142,107,184,0.25);
+  background: rgba(21,7,40,0.7);
+}
+.crate-cell.danger { background: rgba(255,31,110,0.18); }
+.crate-cell-art { width: 96px; height: 56px; display: flex; align-items: center; justify-content: center; color: var(--fg); font-size: 38px; }
+.crate-cell-art svg { width: 100%; height: 100%; }
+.crate-cell-name { font-size: 10px; letter-spacing: 0.18em; color: var(--dim); }
+.crate-cell.danger .crate-cell-name { color: var(--danger); }
+.crate-pointer {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--cyan);
+  transform: translateX(-1px);
+}
+.crate-status { text-align: center; font-size: 14px; letter-spacing: 0.3em; color: var(--fg); }
+.crate-status.ok { color: var(--acid); text-shadow: 0 0 8px var(--acid); }
+.crate-status.danger { color: var(--danger); text-shadow: 0 0 8px var(--danger); }
+
+/* Shop prop info grid (info-only — purchase is in-world via F) */
+.shop-props-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.shop-prop {
+  background: rgba(21,7,40,0.6);
+  border: 2px solid var(--dim2);
+  padding: 10px 12px;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+}
+.shop-prop-name { font-family: var(--display); font-size: 16px; letter-spacing: 0.06em; color: var(--yellow); }
+.shop-prop-cost { font-family: var(--mono); font-size: 12px; letter-spacing: 0.2em; color: var(--fg); margin-top: 2px; }
+.shop-prop-desc { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 
 /* ──────────────────────────── GAME OVER ──────────────────────────── */
 #gameover {

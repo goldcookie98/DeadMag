@@ -1,6 +1,9 @@
-import { WALLS, MAP_W, MAP_H } from "./map.js";
+import { WALLS, MAP_W, MAP_H, CRATE, PAP, BARRICADE } from "./map.js";
 import { CONSTANTS } from "./sim.js";
 import { WEAPONS } from "./weapons.js";
+
+const INTERACT_RANGE = 64;
+const PAP_MIN_WAVE = 5;
 
 const VOLT = {
   bg: "#08020F",
@@ -37,7 +40,8 @@ export function render(ctx, sim, camera, localId, mouse) {
   ctx.translate(-camera.x, -camera.y);
 
   drawGrid(ctx, camera);
-  drawWalls(ctx);
+  drawWalls(ctx, sim);
+  drawProps(ctx, sim, localId);
   drawBlood(ctx, sim.timeMs);
 
   for (const e of sim.explosions) drawExplosion(ctx, e, sim.timeMs);
@@ -302,7 +306,7 @@ function drawStaggerEffects(ctx, zombies, timeMs) {
   }
 }
 
-function drawWalls(ctx) {
+function drawWalls(ctx, sim) {
   for (const w of WALLS) {
     ctx.fillStyle = VOLT.surface;
     ctx.fillRect(w.x, w.y, w.w, w.h);
@@ -313,6 +317,145 @@ function drawWalls(ctx) {
     ctx.lineWidth = 0.6;
     ctx.strokeRect(w.x + 2.5, w.y + 2.5, w.w - 5, w.h - 5);
   }
+  if (!sim?.barricadeDown) drawBarricade(ctx, BARRICADE);
+}
+
+function drawBarricade(ctx, b) {
+  ctx.save();
+  ctx.fillStyle = "#2A1810";
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+  // Plank slats.
+  ctx.strokeStyle = "rgba(255,224,62,0.55)";
+  ctx.lineWidth = 1;
+  for (let y = b.y + 12; y < b.y + b.h; y += 22) {
+    ctx.beginPath();
+    ctx.moveTo(b.x + 2, y);
+    ctx.lineTo(b.x + b.w - 2, y);
+    ctx.stroke();
+  }
+  // Nails.
+  ctx.fillStyle = VOLT.fg;
+  for (let y = b.y + 8; y < b.y + b.h - 4; y += 18) {
+    ctx.fillRect(b.x + 4, y, 2, 2);
+    ctx.fillRect(b.x + b.w - 6, y, 2, 2);
+  }
+  ctx.restore();
+}
+
+function drawProps(ctx, sim, localId) {
+  drawCrate(ctx, CRATE, sim.timeMs);
+  drawPap(ctx, PAP, sim?.wave ?? 0, sim.timeMs);
+
+  // Proximity F-prompts for the local player.
+  const me = sim.players.get(localId);
+  if (!me || me.state !== "alive" || me.crateOpenedAt) return;
+  const candidates = [
+    { rect: CRATE, label: "OPEN CRATE · $950", color: VOLT.yellow, canShow: me.cash >= 950 || true },
+    { rect: PAP, label: sim.wave < PAP_MIN_WAVE
+        ? `PACK-A-PUNCH · UNLOCKS W${PAP_MIN_WAVE}`
+        : (me.slotPacked?.[me.activeSlot] ? "ALREADY PACKED" : "PACK · $10,000"),
+      color: VOLT.acid, canShow: true },
+  ];
+  if (!sim.barricadeDown) {
+    candidates.push({ rect: BARRICADE, label: "BREAK BARRICADE · $1,000", color: VOLT.magenta, canShow: true });
+  }
+  for (const c of candidates) {
+    const cx = c.rect.x + c.rect.w / 2;
+    const cy = c.rect.y + c.rect.h / 2;
+    const d = Math.hypot(me.x - cx, me.y - cy);
+    if (d > INTERACT_RANGE) continue;
+    drawInteractPrompt(ctx, cx, c.rect.y - 12, c.label, c.color);
+  }
+}
+
+function drawCrate(ctx, c, timeMs) {
+  ctx.save();
+  // Body.
+  ctx.fillStyle = "#3A2A1A";
+  ctx.fillRect(c.x, c.y, c.w, c.h);
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
+  // Banding.
+  ctx.strokeStyle = "rgba(255,224,62,0.7)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(c.x, c.y + c.h * 0.4);
+  ctx.lineTo(c.x + c.w, c.y + c.h * 0.4);
+  ctx.moveTo(c.x + c.w * 0.5, c.y);
+  ctx.lineTo(c.x + c.w * 0.5, c.y + c.h);
+  ctx.stroke();
+  // Pulse glyph.
+  const pulse = 0.5 + 0.5 * Math.sin(timeMs * 0.005);
+  ctx.globalAlpha = 0.4 + pulse * 0.5;
+  ctx.fillStyle = VOLT.yellow;
+  ctx.shadowColor = VOLT.yellow;
+  ctx.shadowBlur = 10;
+  ctx.font = "bold 14px Anton, Impact, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("$", c.x + c.w / 2, c.y + c.h / 2);
+  ctx.restore();
+}
+
+function drawPap(ctx, p, wave, timeMs) {
+  ctx.save();
+  // Base.
+  ctx.fillStyle = "#1B0A36";
+  ctx.fillRect(p.x, p.y, p.w, p.h);
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 2.2;
+  ctx.strokeRect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1);
+  // Slot opening.
+  ctx.fillStyle = "#08020F";
+  ctx.fillRect(p.x + 8, p.y + p.h / 2 - 4, p.w - 16, 8);
+  // Animated glow inside the slot.
+  const pulse = 0.5 + 0.5 * Math.sin(timeMs * 0.004);
+  const locked = wave < PAP_MIN_WAVE;
+  ctx.globalAlpha = 0.5 + pulse * 0.4;
+  ctx.fillStyle = locked ? VOLT.magenta : VOLT.acid;
+  ctx.shadowColor = ctx.fillStyle;
+  ctx.shadowBlur = 12;
+  ctx.fillRect(p.x + 10, p.y + p.h / 2 - 2, p.w - 20, 4);
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = locked ? VOLT.magenta : VOLT.acid;
+  ctx.font = "bold 9px JetBrains Mono, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("PACK-A-PUNCH", p.x + p.w / 2, p.y + 10);
+  ctx.restore();
+}
+
+function drawInteractPrompt(ctx, cx, cy, label, color) {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.font = "bold 11px JetBrains Mono, monospace";
+  const padX = 6;
+  const padY = 4;
+  const textW = ctx.measureText(label).width;
+  const boxW = textW + 24 + padX * 2;
+  const boxH = 18;
+  ctx.fillStyle = "rgba(8,2,15,0.85)";
+  ctx.fillRect(cx - boxW / 2, cy - boxH, boxW, boxH);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(cx - boxW / 2 + 0.5, cy - boxH + 0.5, boxW - 1, boxH - 1);
+  // [F] chip.
+  ctx.fillStyle = color;
+  ctx.fillRect(cx - boxW / 2 + padX - 2, cy - boxH + 3, 16, boxH - 6);
+  ctx.fillStyle = "#08020F";
+  ctx.font = "bold 10px JetBrains Mono, monospace";
+  ctx.fillText("F", cx - boxW / 2 + padX + 6, cy - 5);
+  ctx.fillStyle = color;
+  ctx.font = "bold 10px JetBrains Mono, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(label, cx - boxW / 2 + padX + 18, cy - 5);
+  ctx.restore();
 }
 
 function drawPlayer(ctx, p, isLocal) {
