@@ -1,7 +1,7 @@
 import { SHOP_ITEMS } from "./sim.js";
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 
-const WEAPON_SVG = {
+export const WEAPON_SVG = {
   pistol: `<svg viewBox="0 0 160 80" preserveAspectRatio="xMidYMid meet" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
 <path d="M 38 30 L 110 30 L 110 40 L 100 42 L 96 46 L 38 46 Z" />
 <rect x="108" y="34" width="8" height="6" fill="var(--cyan)" stroke="var(--cyan)" />

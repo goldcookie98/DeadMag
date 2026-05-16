@@ -1,6 +1,7 @@
 import { WALLS, MAP_W, MAP_H, CRATE, PAP, BARRICADE } from "./map.js";
 import { CONSTANTS } from "./sim.js";
 import { WEAPONS } from "./weapons.js";
+import { WEAPON_SVG } from "./ui.js";
 
 const INTERACT_RANGE = 64;
 const PAP_MIN_WAVE = 5;
@@ -391,12 +392,32 @@ function drawProps(ctx, sim, localId) {
 // ────────── Crate spin (in-world CS:GO-style strip) ──────────
 const CRATE_ANIM_MS = 3500;
 const CRATE_POOL = ["pistol", "shotgun", "smg", "sniper", "rocket", "knife", "voltspike", "ripple"];
-const CRATE_SPIN_W = 360;
-const CRATE_SPIN_H = 60;
-const CRATE_CELL_W = 60;
+const CRATE_SPIN_W = 380;
+const CRATE_SPIN_H = 84;
+const CRATE_CELL_W = 76;
 const CRATE_TARGET_IDX = 34;
 const CRATE_STRIP_LEN = 40;
 const _crateStrips = new Map(); // playerId → { openedAt, cells }
+const _weaponIconCache = {}; // weaponId → Image (rasterised SVG)
+
+function getWeaponIcon(wid) {
+  if (wid in _weaponIconCache) return _weaponIconCache[wid];
+  const svg = WEAPON_SVG[wid];
+  if (!svg) { _weaponIconCache[wid] = null; return null; }
+  // The HUD SVGs use CSS vars (var(--cyan)) and currentColor; substitute the
+  // VOLT palette literally so the raster works without a stylesheet.
+  const resolved = svg
+    .replace(/var\(--cyan\)/g, VOLT.cyan)
+    .replace(/var\(--magenta\)/g, VOLT.magenta)
+    .replace(/var\(--acid\)/g, VOLT.acid)
+    .replace(/var\(--yellow\)/g, VOLT.yellow)
+    .replace(/currentColor/g, VOLT.fg);
+  const blob = new Blob([resolved], { type: "image/svg+xml" });
+  const img = new Image();
+  img.src = URL.createObjectURL(blob);
+  _weaponIconCache[wid] = img;
+  return img;
+}
 
 function getCrateStripCells(playerId, openedAt, result, blowUp) {
   const cached = _crateStrips.get(playerId);
@@ -438,6 +459,8 @@ function drawCrateSpin(ctx, p, simTimeMs) {
   ctx.font = "bold 9px JetBrains Mono, monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  const iconW = CRATE_CELL_W - 12;
+  const iconH = iconW * 0.5; // SVG viewBox is 160x80, so 2:1
   for (let i = 0; i < cells.length; i++) {
     const cellLeft = boxX + i * CRATE_CELL_W - offset;
     if (cellLeft + CRATE_CELL_W < boxX || cellLeft > boxX + CRATE_SPIN_W) continue;
@@ -445,9 +468,20 @@ function drawCrateSpin(ctx, p, simTimeMs) {
     const isBoom = wid === "BOOM";
     ctx.fillStyle = isBoom ? "rgba(255,31,110,0.22)" : "rgba(21,7,40,0.7)";
     ctx.fillRect(cellLeft, boxY + 2, CRATE_CELL_W - 1, CRATE_SPIN_H - 4);
-    ctx.fillStyle = isBoom ? VOLT.magenta : VOLT.fg;
-    const name = isBoom ? "BOOM" : (WEAPONS[wid]?.name || wid).toUpperCase();
-    ctx.fillText(name, cellLeft + CRATE_CELL_W / 2, boxY + CRATE_SPIN_H / 2);
+    if (isBoom) {
+      ctx.fillStyle = VOLT.magenta;
+      ctx.font = "bold 22px Anton, Impact, sans-serif";
+      ctx.fillText("⚠", cellLeft + CRATE_CELL_W / 2, boxY + CRATE_SPIN_H / 2 - 8);
+      ctx.font = "bold 9px JetBrains Mono, monospace";
+      ctx.fillText("BOOM", cellLeft + CRATE_CELL_W / 2, boxY + CRATE_SPIN_H - 12);
+    } else {
+      const img = getWeaponIcon(wid);
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, cellLeft + (CRATE_CELL_W - iconW) / 2, boxY + 8, iconW, iconH);
+      }
+      ctx.fillStyle = VOLT.dim;
+      ctx.fillText((WEAPONS[wid]?.name || wid).toUpperCase(), cellLeft + CRATE_CELL_W / 2, boxY + CRATE_SPIN_H - 12);
+    }
   }
 
   // Pointer.
