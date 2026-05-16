@@ -74,6 +74,21 @@ export function applyCheat(code, { sim, localId }) {
       me.doubleMoney = !me.doubleMoney;
       return { ok: true, message: me.doubleMoney ? "double money ON." : "double money OFF." };
 
+    case "no delay":
+    case "nodelay":
+    case "rapid fire":
+    case "rapidfire":
+      me.noDelay = !me.noDelay;
+      return { ok: true, message: me.noDelay ? "no fire delay ON." : "no fire delay OFF." };
+
+    case "infinite ammo":
+    case "inf ammo":
+    case "infammo":
+    case "no reload":
+    case "noreload":
+      me.infAmmo = !me.infAmmo;
+      return { ok: true, message: me.infAmmo ? "infinite ammo ON." : "infinite ammo OFF." };
+
     case "all normal":
     case "normal horde":
       sim.forceZombieKind = null;

@@ -368,13 +368,19 @@ function tryShoot(sim, p, input) {
   // in updateCharges — tryShoot is a no-op for them.
   if (w.kind === "charge") return;
   const now = sim.timeMs;
+  if (p.infAmmo && w.kind !== "melee") {
+    p.ammo = w.mag;
+    p.slotAmmo[p.activeSlot] = p.ammo;
+    p.reloadingUntil = 0;
+    p.reloadDuration = 0;
+  }
   if (now < p.reloadingUntil) return;
   if (w.kind !== "melee" && p.ammo <= 0) {
     startReload(sim, p);
     return;
   }
   const rate = w.rate * rateMulFor(p);
-  if (now - p.lastShotAt < rate) return;
+  if (!p.noDelay && now - p.lastShotAt < rate) return;
   p.lastShotAt = now;
 
   const dx = input.aimX - p.x;
@@ -422,9 +428,11 @@ function tryShoot(sim, p, input) {
       traveled: 0,
     });
   }
-  p.ammo -= 1;
-  p.slotAmmo[p.activeSlot] = p.ammo;
-  if (p.ammo <= 0 && w.kind === "ranged") startReload(sim, p);
+  if (!p.infAmmo) {
+    p.ammo -= 1;
+    p.slotAmmo[p.activeSlot] = p.ammo;
+    if (p.ammo <= 0 && w.kind === "ranged") startReload(sim, p);
+  }
 }
 
 function startReload(sim, p) {
@@ -727,9 +735,11 @@ function updateCharges(sim) {
       const dmg = w.dmg * ratio * dmgMulFor(p);
       const radius = w.range * ratio;
       emitSonicRing(sim, p, dmg, radius, w.staggerMs);
-      p.ammo -= 1;
-      p.slotAmmo[p.activeSlot] = p.ammo;
-      if (p.ammo <= 0) startReload(sim, p);
+      if (!p.infAmmo) {
+        p.ammo -= 1;
+        p.slotAmmo[p.activeSlot] = p.ammo;
+        if (p.ammo <= 0) startReload(sim, p);
+      }
     }
   }
 }
