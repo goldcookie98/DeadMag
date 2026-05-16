@@ -1,0 +1,43 @@
+DEADMAG · CHEAT CODES
+=====================
+
+Solo modes only. Open the cheat panel by clicking the version label
+in the corner, type a code, and hit ENTER (or APPLY).
+
+CODES
+-----
+
+money            — Set your cash to $999,999.
+max money        — Alias for "money".
+
+god              — Toggle invincibility (you take no damage).
+invincible       — Alias for "god".
+invincibility    — Alias for "god".
+
+all normal       — Stop forcing a zombie type; spawns return to the
+                   normal wave-based mix.
+normal horde     — Alias for "all normal".
+
+all sprinter     — Every zombie that spawns is a SPRINTER (fast,
+                   fragile, comes in packs).
+all sprinters    — Alias.
+sprinter horde   — Alias.
+
+all brute        — Every zombie that spawns is a BRUTE (slow, armored
+                   tank with three plates).
+all brutes       — Alias.
+brute horde      — Alias.
+
+all volt-fuse    — Every zombie that spawns is a VOLT-FUSE (exploder;
+                   detonates on proximity or after ~6s).
+all voltfuse     — Alias.
+all exploder     — Alias.
+all exploders    — Alias.
+volt horde       — Alias.
+
+NOTES
+-----
+- "all <kind>" cheats override the round-based spawn weighting, so
+  you can fight a single type from round 1.
+- Re-typing the same toggle cheat (god) flips it off.
+- Cheats are blocked in multiplayer — the server is authoritative.

@@ -13,6 +13,8 @@ const VOLT = {
   dim: "#8E6BB8",
 };
 
+const VOLT_FUSE_LIFE_MS = 6000;
+let _renderSimTime = 0;
 const _bloodDecals = [];
 // Local-only muzzle flashes for the client player's shots. Driven by main.js
 // on click edge so the user sees their gun fire instantly instead of waiting
@@ -27,6 +29,7 @@ const HIT_MARKER_LIFE_MS = 180;
 
 export function render(ctx, sim, camera, localId, mouse) {
   const { vw, vh } = camera;
+  _renderSimTime = sim.timeMs;
   ctx.fillStyle = VOLT.bg;
   ctx.fillRect(0, 0, vw, vh);
 
@@ -295,7 +298,14 @@ function drawDownedPlayer(ctx, p, isLocal, timeMs) {
 }
 
 function drawZombie(ctx, z) {
-  const r = CONSTANTS.ZOMBIE_R;
+  if (z.kind === "sprinter") return drawSprinter(ctx, z);
+  if (z.kind === "brute") return drawBrute(ctx, z);
+  if (z.kind === "volt-fuse") return drawVoltFuse(ctx, z);
+  return drawNormalZombie(ctx, z);
+}
+
+function drawNormalZombie(ctx, z) {
+  const r = z.radius || CONSTANTS.ZOMBIE_R;
   ctx.fillStyle = "#4D3A2A";
   ctx.beginPath();
   ctx.arc(z.x, z.y, r, 0, Math.PI * 2);
@@ -307,6 +317,190 @@ function drawZombie(ctx, z) {
   ctx.fillRect(z.x - 3, z.y - 3, 2.5, 2.5);
   ctx.fillRect(z.x + 1, z.y - 3, 2.5, 2.5);
   drawZombieHp(ctx, z.x, z.y - r - 8, z.hp, z.maxHp);
+}
+
+function drawSprinter(ctx, z) {
+  ctx.save();
+  ctx.translate(z.x, z.y);
+  // Motion lines pulse: alternate opacities across the three trails.
+  const phase = Math.floor(performance.now() / 80) % 3;
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 1.4;
+  const trails = [
+    [-22, -12, -32, -12],
+    [-22, 0, -36, 0],
+    [-22, 12, -32, 12],
+  ];
+  for (let i = 0; i < trails.length; i++) {
+    ctx.globalAlpha = i === phase ? 0.22 : 0.45;
+    const t = trails[i];
+    ctx.beginPath();
+    ctx.moveTo(t[0], t[1]); ctx.lineTo(t[2], t[3]);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Lean body (ellipse).
+  ctx.fillStyle = "#4D3A2A";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 10, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // Eye halos.
+  ctx.fillStyle = "rgba(255,31,110,0.3)";
+  ctx.beginPath(); ctx.arc(-2.7, -0.8, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(2.7, -0.8, 3, 0, Math.PI * 2); ctx.fill();
+  // Eyes.
+  ctx.fillStyle = VOLT.magenta;
+  ctx.fillRect(-4, -2, 2.5, 2.5);
+  ctx.fillRect(1.5, -2, 2.5, 2.5);
+  // Forward-lean chevron.
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(8, -3); ctx.lineTo(13, -2); ctx.lineTo(8, -1);
+  ctx.stroke();
+  ctx.restore();
+  drawZombieHp(ctx, z.x, z.y - z.radius - 8, z.hp, z.maxHp);
+}
+
+function drawBrute(ctx, z) {
+  ctx.save();
+  ctx.translate(z.x, z.y);
+  // Body.
+  ctx.fillStyle = "#3A2A1F";
+  ctx.beginPath();
+  ctx.arc(0, 0, 22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(182,255,46,0.6)";
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  // Armor plates.
+  const plateGeo = [
+    { path: [[-22, -8], [-16, -16], [-10, -10], [-14, -2]], bolt: [-16, -10] },
+    { path: [[22, -8], [16, -16], [10, -10], [14, -2]], bolt: [16, -10] },
+    { path: [[-10, 22], [-4, 16], [4, 16], [10, 22]], bolt: [0, 19] },
+  ];
+  for (let i = 0; i < plateGeo.length; i++) {
+    const g = plateGeo[i];
+    const plate = z.plates ? z.plates[i] : { alive: true };
+    ctx.beginPath();
+    ctx.moveTo(g.path[0][0], g.path[0][1]);
+    for (let k = 1; k < g.path.length; k++) ctx.lineTo(g.path[k][0], g.path[k][1]);
+    ctx.closePath();
+    ctx.fillStyle = plate.alive ? "#5A4632" : "#1A0A0A";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,224,62,0.6)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (plate.alive) {
+      ctx.fillStyle = VOLT.yellow;
+      ctx.beginPath();
+      ctx.arc(g.bolt[0], g.bolt[1], 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // Eyes (yellow, 4x4).
+  ctx.fillStyle = VOLT.yellow;
+  ctx.fillRect(-6, -5, 4, 4);
+  ctx.fillRect(2, -5, 4, 4);
+  // Magenta grimace.
+  ctx.strokeStyle = VOLT.magenta;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-8, 6);
+  ctx.lineTo(-4, 10);
+  ctx.lineTo(0, 7);
+  ctx.lineTo(4, 10);
+  ctx.lineTo(8, 6);
+  ctx.stroke();
+  ctx.restore();
+  drawZombieHp(ctx, z.x, z.y - 22 - 8, z.hp, z.maxHp);
+}
+
+function drawVoltFuse(ctx, z) {
+  const now = performance.now();
+  const remaining = (z.detonateAt && z.detonateAt > 0) ? Math.max(0, z.detonateAt - _renderSimTime) : VOLT_FUSE_LIFE_MS;
+  // Critical phase = last 1.5s of fuse.
+  const critical = z.detonateAt > 0 && remaining < 1500;
+  const pulseHz = critical ? 4 : 1.25;
+  const pulsePhase = 0.5 + 0.5 * Math.sin(now * 0.001 * Math.PI * 2 * pulseHz);
+  const auraColor = critical ? VOLT.magenta : VOLT.yellow;
+
+  ctx.save();
+  ctx.translate(z.x, z.y);
+
+  // Outer dashed danger aura (rotating).
+  ctx.save();
+  ctx.rotate((now * 0.0005) % (Math.PI * 2));
+  ctx.strokeStyle = auraColor;
+  ctx.globalAlpha = 0.3;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.fillStyle = auraColor;
+  ctx.globalAlpha = 0.06;
+  ctx.beginPath();
+  ctx.arc(0, 0, 32, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.3;
+  ctx.beginPath();
+  ctx.arc(0, 0, 32, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Inner pulsing glow.
+  ctx.globalAlpha = 0.18 + pulsePhase * 0.17;
+  ctx.fillStyle = VOLT.yellow;
+  ctx.beginPath();
+  ctx.arc(0, 0, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.6;
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Body.
+  ctx.fillStyle = "#5A4A1A";
+  ctx.beginPath();
+  ctx.arc(0, 0, 15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  // Magenta cracks.
+  ctx.strokeStyle = VOLT.magenta;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-10, -8); ctx.lineTo(-4, -2); ctx.lineTo(-8, 4);
+  ctx.moveTo(8, -10); ctx.lineTo(4, -4); ctx.lineTo(10, 2);
+  ctx.moveTo(-6, 10); ctx.lineTo(2, 8); ctx.lineTo(8, 12);
+  ctx.stroke();
+
+  // Eyes (circles).
+  ctx.fillStyle = VOLT.magenta;
+  ctx.beginPath(); ctx.arc(-4, -3, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(4, -3, 2, 0, Math.PI * 2); ctx.fill();
+
+  // Fuse stem + tip.
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(0, -15); ctx.lineTo(0, -22);
+  ctx.stroke();
+  ctx.fillStyle = VOLT.magenta;
+  ctx.beginPath();
+  ctx.arc(0, -25, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.restore();
+  drawZombieHp(ctx, z.x, z.y - 32 - 6, z.hp, z.maxHp);
 }
 
 function drawZombieHp(ctx, x, y, hp, maxHp) {

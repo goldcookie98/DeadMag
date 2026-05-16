@@ -502,7 +502,8 @@ function ghostBulletHit(nx, ny, snapSim) {
   if (!snapSim) return null;
   for (const z of snapSim.zombies) {
     const dx = z.x - nx, dy = z.y - ny;
-    if (dx * dx + dy * dy <= (GHOST_ZOMBIE_R + GHOST_BULLET_R) ** 2) {
+    const r = (z.radius || GHOST_ZOMBIE_R) + GHOST_BULLET_R;
+    if (dx * dx + dy * dy <= r * r) {
       return { x: nx, y: ny };
     }
   }

@@ -53,6 +53,38 @@ export function applyCheat(code, { sim, localId }) {
     case "money":
       me.cash = 999999;
       return { ok: true, message: `cash set to $${me.cash}.` };
+
+    case "god":
+    case "invincible":
+    case "invincibility":
+      me.invincible = !me.invincible;
+      return { ok: true, message: me.invincible ? "invincibility ON." : "invincibility OFF." };
+
+    case "all normal":
+    case "normal horde":
+      sim.forceZombieKind = null;
+      return { ok: true, message: "zombie spawns: normal mix." };
+
+    case "all sprinter":
+    case "all sprinters":
+    case "sprinter horde":
+      sim.forceZombieKind = "sprinter";
+      return { ok: true, message: "every spawn is a sprinter." };
+
+    case "all brute":
+    case "all brutes":
+    case "brute horde":
+      sim.forceZombieKind = "brute";
+      return { ok: true, message: "every spawn is a brute." };
+
+    case "all volt-fuse":
+    case "all voltfuse":
+    case "all exploder":
+    case "all exploders":
+    case "volt horde":
+      sim.forceZombieKind = "volt-fuse";
+      return { ok: true, message: "every spawn is a volt-fuse." };
+
     default:
       return { ok: false, message: `unknown cheat: ${code}` };
   }

@@ -13,6 +13,18 @@ const DOWN_BLEED_MS = 30000;
 const REVIVE_TIME_MS = 5000;
 const REVIVE_RANGE = PLAYER_R * 5.5;
 
+// Special-zombie tuning
+const VOLT_FUSE_LIFE_MS = 6000;
+const VOLT_FUSE_PROX_DETONATE = 90;
+const VOLT_FUSE_SPLASH_R = 120;
+const VOLT_FUSE_DMG = 80;
+const VOLT_FUSE_SIGHT_R = 520;
+const VOLT_FUSE_TIP_OFFSET = 25;
+const VOLT_FUSE_TIP_R = 5;
+const BRUTE_PLATE_HP = 100;
+const BRUTE_PLATE_ABSORB = 0.7;
+const BRUTE_SHOVE = 30;
+
 let _id = 1;
 const nextId = () => _id++;
 
@@ -51,6 +63,8 @@ function makeZombie(x, y, wave) {
   const hp = 40 + wave * 12;
   return {
     id: nextId(),
+    kind: "normal",
+    radius: ZOMBIE_R,
     x, y,
     hp, maxHp: hp,
     speed: 90 * speedMul,
@@ -60,6 +74,62 @@ function makeZombie(x, y, wave) {
     detourDir: 0,
     detourUntil: 0,
   };
+}
+
+function makeSprinter(x, y, wave) {
+  const z = makeZombie(x, y, wave);
+  z.kind = "sprinter";
+  z.radius = 11;
+  z.hp = Math.round(z.hp * 0.5);
+  z.maxHp = z.hp;
+  z.speed *= 1.6;
+  z.dmg = Math.round(z.dmg * 0.5);
+  return z;
+}
+
+function makeBrute(x, y, wave) {
+  const z = makeZombie(x, y, wave);
+  z.kind = "brute";
+  z.radius = 22;
+  z.hp = Math.round(z.hp * 4);
+  z.maxHp = z.hp;
+  z.speed *= 0.6;
+  z.dmg = Math.round(z.dmg * 2);
+  z.plates = [
+    { hp: BRUTE_PLATE_HP, maxHp: BRUTE_PLATE_HP, alive: true },
+    { hp: BRUTE_PLATE_HP, maxHp: BRUTE_PLATE_HP, alive: true },
+    { hp: BRUTE_PLATE_HP, maxHp: BRUTE_PLATE_HP, alive: true },
+  ];
+  return z;
+}
+
+function makeVoltFuse(x, y, wave) {
+  const z = makeZombie(x, y, wave);
+  z.kind = "volt-fuse";
+  z.radius = 15;
+  z.firstSightedAt = 0;
+  z.detonateAt = 0;
+  z.detonating = false;
+  return z;
+}
+
+function makeZombieOfKind(kind, x, y, wave) {
+  if (kind === "sprinter") return makeSprinter(x, y, wave);
+  if (kind === "brute") return makeBrute(x, y, wave);
+  if (kind === "volt-fuse") return makeVoltFuse(x, y, wave);
+  return makeZombie(x, y, wave);
+}
+
+function pickZombieKind(sim) {
+  if (sim.forceZombieKind) return sim.forceZombieKind;
+  const wave = sim.wave;
+  if (wave < 3) return "normal";
+  const specialRate = Math.min(0.30, 0.08 + (wave - 3) * 0.03);
+  if (Math.random() >= specialRate) return "normal";
+  const pool = ["sprinter"];
+  if (wave >= 6) pool.push("brute");
+  if (wave >= 8) pool.push("volt-fuse");
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 export function createSim(mode = "horde") {
@@ -78,6 +148,8 @@ export function createSim(mode = "horde") {
     nextWaveAt: 0,
     zombiesToSpawn: 0,
     zombieSpawnAt: 0,
+    packQueue: null,
+    forceZombieKind: null,
     shopOpenUntil: 0,
     shopOpen: false,
     gameOver: false,
@@ -227,16 +299,13 @@ function tryShoot(sim, p, input) {
   const baseAngle = Math.atan2(dy, dx);
 
   if (w.kind === "melee") {
-    for (const z of sim.zombies) {
+    for (const z of [...sim.zombies]) {
       const ddx = z.x - p.x, ddy = z.y - p.y;
       const dist = Math.hypot(ddx, ddy);
-      if (dist > w.range) continue;
+      if (dist > w.range + (z.radius - ZOMBIE_R)) continue;
       const a = Math.atan2(ddy, ddx);
       const da = Math.abs(angleDiff(a, baseAngle));
-      if (da < 0.6) {
-        z.hp -= w.dmg * dmgMulFor(p);
-        if (z.hp <= 0) onZombieDeath(sim, z, p);
-      }
+      if (da < 0.6) damageZombie(sim, z, w.dmg * dmgMulFor(p), p);
     }
     for (const [, other] of sim.players) {
       if (other.id === p.id || !other.alive) continue;
@@ -294,6 +363,7 @@ function finishReloads(sim) {
 
 function damagePlayer(sim, target, amount, attacker) {
   if (target.state === "dead") return;
+  if (target.invincible) return;
   const absorb = Math.min(target.armor, amount * 0.6);
   target.armor = Math.max(0, target.armor - absorb);
   const taken = amount - absorb;
@@ -398,13 +468,87 @@ export function shopRevive(sim, playerId) {
   return true;
 }
 
-function onZombieDeath(sim, z, killer) {
+function onZombieDeath(sim, z, killer, opts = {}) {
   sim.zombies = sim.zombies.filter((zz) => zz !== z);
   if (killer) {
-    killer.cash += 20;
+    let reward = 20;
+    if (z.kind === "sprinter") reward = 40;
+    else if (z.kind === "brute") reward = 40;
+    else if (z.kind === "volt-fuse") reward = opts.fuseTipKill ? 60 : 30;
+    killer.cash += reward;
     killer.score += 1;
     sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon });
   }
+}
+
+// Routes raw damage through kind-specific gates (brute plates, volt-fuse
+// fuse-immunity). Returns true if the zombie was killed by this call.
+function damageZombie(sim, z, dmg, attacker, opts = {}) {
+  if (z.kind === "volt-fuse") {
+    if (opts.fuseTipHit) {
+      detonateVoltFuse(sim, z, attacker, { fuseTipKill: true });
+      return true;
+    }
+    if (opts.explosion) {
+      z.hp -= dmg;
+      if (z.hp <= 0) {
+        detonateVoltFuse(sim, z, attacker, { fuseTipKill: false });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (z.kind === "brute") {
+    const aliveIdxs = [];
+    for (let i = 0; i < z.plates.length; i++) if (z.plates[i].alive) aliveIdxs.push(i);
+    if (aliveIdxs.length > 0) {
+      z.hp -= dmg * (1 - BRUTE_PLATE_ABSORB);
+      const pi = aliveIdxs[Math.floor(Math.random() * aliveIdxs.length)];
+      const plate = z.plates[pi];
+      plate.hp -= dmg;
+      if (plate.hp <= 0) {
+        plate.alive = false;
+        plate.hp = 0;
+        if (attacker) attacker.cash += 20;
+      }
+    } else {
+      z.hp -= dmg;
+    }
+  } else {
+    z.hp -= dmg;
+  }
+
+  if (z.hp <= 0) {
+    onZombieDeath(sim, z, attacker);
+    return true;
+  }
+  return false;
+}
+
+function detonateVoltFuse(sim, z, attacker, opts = {}) {
+  if (z.detonating) return;
+  z.detonating = true;
+  sim.explosions.push({ x: z.x, y: z.y, r: VOLT_FUSE_SPLASH_R, t: sim.timeMs });
+  // Friendly fire: damage other zombies in radius (chain detonations possible).
+  for (const other of [...sim.zombies]) {
+    if (other === z) continue;
+    const d = Math.hypot(other.x - z.x, other.y - z.y);
+    if (d <= VOLT_FUSE_SPLASH_R) {
+      const dmg = VOLT_FUSE_DMG * (1 - d / VOLT_FUSE_SPLASH_R);
+      damageZombie(sim, other, dmg, attacker, { explosion: true });
+    }
+  }
+  // Damage players in radius (always — fuse-tip kill still damages other players in range).
+  for (const [, p] of sim.players) {
+    if (p.state !== "alive") continue;
+    const d = Math.hypot(p.x - z.x, p.y - z.y);
+    if (d <= VOLT_FUSE_SPLASH_R) {
+      const dmg = VOLT_FUSE_DMG * (1 - d / VOLT_FUSE_SPLASH_R);
+      damagePlayer(sim, p, dmg, null);
+    }
+  }
+  onZombieDeath(sim, z, attacker, { fuseTipKill: !!opts.fuseTipKill });
 }
 
 function respawnPlayer(sim, p) {
@@ -443,7 +587,13 @@ function updateBullets(sim, dt) {
 
     let hit = null;
     for (const z of sim.zombies) {
-      if (circleSeg(b.x, b.y, nx, ny, z.x, z.y, ZOMBIE_R + BULLET_R)) { hit = { zombie: z }; break; }
+      if (z.kind === "volt-fuse") {
+        if (circleSeg(b.x, b.y, nx, ny, z.x, z.y - VOLT_FUSE_TIP_OFFSET, VOLT_FUSE_TIP_R + BULLET_R)) {
+          hit = { zombie: z, fuseTip: true };
+          break;
+        }
+      }
+      if (circleSeg(b.x, b.y, nx, ny, z.x, z.y, z.radius + BULLET_R)) { hit = { zombie: z }; break; }
     }
     if (!hit && sim.mode === "arsenal") {
       for (const [, op] of sim.players) {
@@ -457,8 +607,7 @@ function updateBullets(sim, dt) {
       if (b.weapon === "rocket") {
         rocketExplode(sim, nx, ny, b);
       } else if (hit.zombie) {
-        hit.zombie.hp -= b.dmg;
-        if (hit.zombie.hp <= 0) onZombieDeath(sim, hit.zombie, owner);
+        damageZombie(sim, hit.zombie, b.dmg, owner, { fuseTipHit: !!hit.fuseTip });
       } else if (hit.player) {
         damagePlayer(sim, hit.player, b.dmg, owner);
       }
@@ -484,8 +633,7 @@ function rocketExplode(sim, x, y, b) {
     const d = Math.hypot(z.x - x, z.y - y);
     if (d <= w.splashR) {
       const dmg = w.splashDmg * (1 - d / w.splashR);
-      z.hp -= dmg;
-      if (z.hp <= 0) onZombieDeath(sim, z, owner);
+      damageZombie(sim, z, dmg, owner, { explosion: true });
     }
   }
   if (sim.mode === "arsenal") {
@@ -514,7 +662,8 @@ function circleSeg(x1, y1, x2, y2, cx, cy, r) {
 }
 
 function updateZombies(sim, dt) {
-  for (const z of sim.zombies) {
+  for (const z of [...sim.zombies]) {
+    if (z.detonating) continue;
     let target = null, best = Infinity;
     for (const [, p] of sim.players) {
       if (!p.alive) continue;
@@ -522,19 +671,35 @@ function updateZombies(sim, dt) {
       if (d < best) { best = d; target = p; }
     }
     if (!target) continue;
+
+    if (z.kind === "volt-fuse") {
+      if (z.firstSightedAt === 0 && best <= VOLT_FUSE_SIGHT_R) {
+        z.firstSightedAt = sim.timeMs;
+        z.detonateAt = sim.timeMs + VOLT_FUSE_LIFE_MS;
+      }
+      if (best <= VOLT_FUSE_PROX_DETONATE) {
+        detonateVoltFuse(sim, z, null);
+        continue;
+      }
+      if (z.detonateAt > 0 && sim.timeMs >= z.detonateAt) {
+        detonateVoltFuse(sim, z, null);
+        continue;
+      }
+    }
+
     const baseAng = Math.atan2(target.y - z.y, target.x - z.x);
     let ang = baseAng;
     if (sim.timeMs < z.detourUntil) ang = baseAng + z.detourDir;
     const dx = Math.cos(ang) * z.speed * dt;
     const dy = Math.sin(ang) * z.speed * dt;
-    const moved = moveWithCollisions(z, ZOMBIE_R, dx, dy);
+    const moved = moveWithCollisions(z, z.radius, dx, dy);
 
     const expected = z.speed * dt;
     const actual = Math.hypot(moved.dx, moved.dy);
     if (expected > 0.001 && actual < expected * 0.4) {
       z.stuckMs += dt * 1000;
       if (z.stuckMs > 120 && sim.timeMs >= z.detourUntil) {
-        const side = pickDetourSide(z, ZOMBIE_R, baseAng);
+        const side = pickDetourSide(z, z.radius, baseAng);
         z.detourDir = side * (Math.PI / 2);
         z.detourUntil = sim.timeMs + 350 + Math.random() * 300;
       }
@@ -542,9 +707,14 @@ function updateZombies(sim, dt) {
       z.stuckMs = 0;
     }
 
-    if (best < ZOMBIE_R + PLAYER_R + 4 && sim.timeMs - z.lastHitAt > ZOMBIE_HIT_COOLDOWN) {
+    if (best < z.radius + PLAYER_R + 4 && sim.timeMs - z.lastHitAt > ZOMBIE_HIT_COOLDOWN) {
       z.lastHitAt = sim.timeMs;
       damagePlayer(sim, target, z.dmg, null);
+      if (z.kind === "brute" && target.state === "alive") {
+        const ddx = target.x - z.x, ddy = target.y - z.y;
+        const m = Math.hypot(ddx, ddy) || 1;
+        moveWithCollisions(target, PLAYER_R, (ddx / m) * BRUTE_SHOVE, (ddy / m) * BRUTE_SHOVE);
+      }
     }
   }
 }
@@ -604,14 +774,31 @@ function updateHorde(sim) {
     sim.zombiesToSpawn = 6 + sim.wave * 3;
     sim.waveActive = true;
     sim.zombieSpawnAt = sim.timeMs;
+    sim.packQueue = null;
     sim.events.push({ type: "wave-start", wave: sim.wave });
   }
 
   if (sim.waveActive && sim.zombiesToSpawn > 0 && sim.timeMs >= sim.zombieSpawnAt) {
-    const sp = ZOMBIE_SPAWNS[Math.floor(Math.random() * ZOMBIE_SPAWNS.length)];
-    sim.zombies.push(makeZombie(sp.x, sp.y, sim.wave));
+    let kind, sx, sy, fromPack = false;
+    if (sim.packQueue && sim.packQueue.count > 0) {
+      kind = sim.packQueue.kind;
+      sx = sim.packQueue.x;
+      sy = sim.packQueue.y;
+      sim.packQueue.count -= 1;
+      fromPack = true;
+    } else {
+      kind = pickZombieKind(sim);
+      const sp = ZOMBIE_SPAWNS[Math.floor(Math.random() * ZOMBIE_SPAWNS.length)];
+      sx = sp.x; sy = sp.y;
+      if (kind === "sprinter" && sim.zombiesToSpawn >= 3) {
+        const packSize = Math.min(sim.zombiesToSpawn, 3 + Math.floor(Math.random() * 4));
+        sim.packQueue = { kind: "sprinter", x: sx, y: sy, count: packSize - 1 };
+      }
+    }
+    sim.zombies.push(makeZombieOfKind(kind, sx, sy, sim.wave));
     sim.zombiesToSpawn -= 1;
-    sim.zombieSpawnAt = sim.timeMs + Math.max(150, 600 - sim.wave * 20);
+    const baseDelay = Math.max(150, 600 - sim.wave * 20);
+    sim.zombieSpawnAt = sim.timeMs + (fromPack ? Math.min(180, baseDelay) : baseDelay);
   }
 }
 
