@@ -4,6 +4,7 @@
 
 let ctx = null;
 let master = null;
+const _buffers = new Map(); // url → AudioBuffer (loaded) or Promise
 
 function getCtx() {
   if (ctx) return ctx;
@@ -16,10 +17,46 @@ function getCtx() {
   return ctx;
 }
 
+function loadBuffer(url) {
+  const c = getCtx(); if (!c) return Promise.resolve(null);
+  const cached = _buffers.get(url);
+  if (cached) return Promise.resolve(cached);
+  const p = fetch(url)
+    .then((r) => r.arrayBuffer())
+    .then((ab) => new Promise((res, rej) => c.decodeAudioData(ab, res, rej)))
+    .then((buf) => { _buffers.set(url, buf); return buf; })
+    .catch((e) => { console.warn("[audio] failed to load", url, e); return null; });
+  _buffers.set(url, p);
+  return p;
+}
+
+function playBuffer(url, gainMul = 1, opts = {}) {
+  const c = getCtx(); if (!c) return;
+  const cached = _buffers.get(url);
+  // Synchronous fast-path: we already have the decoded buffer.
+  if (cached && cached.numberOfChannels) {
+    const src = c.createBufferSource();
+    src.buffer = cached;
+    if (opts.detune) src.detune.value = opts.detune;
+    const g = c.createGain();
+    g.gain.value = (opts.peak ?? 0.7) * gainMul;
+    src.connect(g); g.connect(master);
+    src.start();
+    return;
+  }
+  // First call (or still loading): kick off the fetch but skip this hit so
+  // we don't queue a backlog of identical sounds while the user is firing.
+  loadBuffer(url);
+}
+
 export function primeAudio() {
   const c = getCtx();
   if (c && c.state === "suspended") c.resume();
+  // Preload sample assets so the first shot doesn't drop while we fetch.
+  loadBuffer("./assets/sfx/gunshot.mp3");
 }
+
+const GUNSHOT_URL = "./assets/sfx/gunshot.mp3";
 
 export function setMasterVolume(v) {
   getCtx();
@@ -68,15 +105,15 @@ function noiseBurst(dur, filterFreq, q, peak = 0.5, gainMul = 1) {
 
 export function playShoot(weaponId, gainMul = 1) {
   switch (weaponId) {
-    case "pistol":   tone(720, "square", 0.06, 0.35, gainMul); break;
-    case "shotgun":  noiseBurst(0.16, 600, 0.5, 0.8, gainMul); tone(120, "sine", 0.12, 0.5, gainMul); break;
-    case "smg":      tone(1080, "square", 0.04, 0.3, gainMul); break;
-    case "sniper":   tone(180, "sawtooth", 0.22, 0.45, gainMul); noiseBurst(0.06, 4000, 1, 0.4, gainMul); break;
+    case "pistol":   playBuffer(GUNSHOT_URL, gainMul, { detune: 0,    peak: 0.55 }); break;
+    case "shotgun":  playBuffer(GUNSHOT_URL, gainMul, { detune: -400, peak: 0.95 }); break;
+    case "smg":      playBuffer(GUNSHOT_URL, gainMul, { detune: 250,  peak: 0.45 }); break;
+    case "sniper":   playBuffer(GUNSHOT_URL, gainMul, { detune: -600, peak: 0.95 }); break;
     case "rocket":   playRocketLaunch(gainMul); break;
-    case "voltspike": /* sound comes from voltspike-chain event */ tone(900, "square", 0.04, 0.25, gainMul); break;
-    case "ripple":   /* charge weapon — sound comes from sonic-ring event */ break;
+    case "voltspike": /* sound on voltspike-chain event */ break;
+    case "ripple":   /* charge weapon — sound on sonic-ring event */ break;
     case "knife":    tone(220, "triangle", 0.08, 0.3, gainMul); break;
-    default:         tone(700, "square", 0.05, 0.3, gainMul);
+    default:         playBuffer(GUNSHOT_URL, gainMul, { detune: 0, peak: 0.55 });
   }
 }
 
