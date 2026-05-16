@@ -1,5 +1,6 @@
 import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { WALLS, SPAWN_POINTS, ZOMBIE_SPAWNS, MAP_W, MAP_H } from "./map.js";
+import { buildNavGrid, computeFlowField, sampleFlow } from "./pathfinding.js";
 
 const PLAYER_R = 14;
 const ZOMBIE_R = 13;
@@ -24,6 +25,10 @@ const VOLT_FUSE_TIP_R = 5;
 const BRUTE_PLATE_HP = 100;
 const BRUTE_PLATE_ABSORB = 0.7;
 const BRUTE_SHOVE = 30;
+
+// Pathfinding tuning
+const FLOW_REFRESH_MS = 200;
+const DIRECT_CHASE_RANGE = 80;
 
 let _id = 1;
 const nextId = () => _id++;
@@ -155,6 +160,13 @@ export function createSim(mode = "horde") {
     gameOver: false,
     winnerId: null,
     events: [],
+    // Underscore prefix keeps this off the wire (serializeSim ignores it).
+    // Walls are static, so the nav grid is built once and reused.
+    _nav: {
+      grid: buildNavGrid(WALLS, MAP_W, MAP_H),
+      fields: new Map(),
+      lastUpdateAt: -Infinity,
+    },
   };
 }
 
@@ -663,7 +675,59 @@ function circleSeg(x1, y1, x2, y2, cx, cy, r) {
   return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
 }
 
+function updateFlowFields(sim) {
+  const nav = sim._nav;
+  if (!nav) return;
+  if (sim.timeMs - nav.lastUpdateAt < FLOW_REFRESH_MS) return;
+  nav.lastUpdateAt = sim.timeMs;
+  const alive = new Set();
+  for (const [, p] of sim.players) {
+    if (p.state !== "alive") continue;
+    alive.add(p.id);
+    nav.fields.set(p.id, computeFlowField(nav.grid, p.x, p.y));
+  }
+  for (const id of [...nav.fields.keys()]) {
+    if (!alive.has(id)) nav.fields.delete(id);
+  }
+}
+
+// Pairwise zombie separation. O(N²) but N is bounded — zombie counts stay
+// small enough that this is fine. Pushes overlapping pairs apart via
+// moveWithCollisions so the wall solver still wins if separation would
+// shove a zombie into geometry.
+function separateZombies(sim) {
+  const zs = sim.zombies;
+  for (let i = 0; i < zs.length; i++) {
+    const a = zs[i];
+    if (a.detonating) continue;
+    for (let j = i + 1; j < zs.length; j++) {
+      const b = zs[j];
+      if (b.detonating) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const min = a.radius + b.radius;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= min * min || d2 === 0) {
+        if (d2 === 0) {
+          // Identical position: nudge one to break the tie.
+          moveWithCollisions(b, b.radius, 0.5, 0);
+        }
+        continue;
+      }
+      const d = Math.sqrt(d2);
+      const overlap = min - d;
+      const nx = dx / d, ny = dy / d;
+      // Heavier zombies (brutes) move less; split overlap by inverse mass.
+      const massA = a.radius, massB = b.radius;
+      const shareA = massB / (massA + massB);
+      const shareB = massA / (massA + massB);
+      moveWithCollisions(a, a.radius, -nx * overlap * shareA, -ny * overlap * shareA);
+      moveWithCollisions(b, b.radius,  nx * overlap * shareB,  ny * overlap * shareB);
+    }
+  }
+}
+
 function updateZombies(sim, dt) {
+  updateFlowFields(sim);
   for (const z of [...sim.zombies]) {
     if (z.detonating) continue;
     let target = null, best = Infinity;
@@ -689,7 +753,18 @@ function updateZombies(sim, dt) {
       }
     }
 
-    const baseAng = Math.atan2(target.y - z.y, target.x - z.x);
+    const directAng = Math.atan2(target.y - z.y, target.x - z.x);
+    let baseAng = directAng;
+    // Use the flow field unless we're close enough that the direct line is
+    // strictly better (no walls between us at point-blank range), or the
+    // field has no data for this tile.
+    if (best > DIRECT_CHASE_RANGE) {
+      const field = sim._nav?.fields.get(target.id);
+      const flow = field ? sampleFlow(field, z.x, z.y) : null;
+      if (flow && (flow.dx !== 0 || flow.dy !== 0)) {
+        baseAng = Math.atan2(flow.dy, flow.dx);
+      }
+    }
     let ang = baseAng;
     if (sim.timeMs < z.detourUntil) ang = baseAng + z.detourDir;
     const dx = Math.cos(ang) * z.speed * dt;
@@ -719,6 +794,7 @@ function updateZombies(sim, dt) {
       }
     }
   }
+  separateZombies(sim);
 }
 
 function pickDetourSide(ent, r, baseAng) {
