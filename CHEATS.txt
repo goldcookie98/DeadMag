@@ -27,6 +27,20 @@ doublemoney      — Alias.
 2x money         — Alias.
 2x cash          — Alias.
 
+no delay         — Toggle zero-delay firing (fire every tick — caps
+                   at the sim tick rate, but vastly faster than the
+                   weapon's stock rate).
+nodelay          — Alias.
+rapid fire       — Alias.
+rapidfire        — Alias.
+
+infinite ammo    — Toggle bottomless magazine (never decrements ammo,
+                   never triggers a reload).
+inf ammo         — Alias.
+infammo          — Alias.
+no reload        — Alias.
+noreload         — Alias.
+
 all normal       — Stop forcing a zombie type; spawns return to the
                    normal wave-based mix.
 normal horde     — Alias for "all normal".
@@ -42,7 +56,7 @@ all brutes       — Alias.
 brute horde      — Alias.
 
 all volt-fuse    — Every zombie that spawns is a VOLT-FUSE (exploder;
-                   detonates on proximity or after ~6s).
+                   detonates on close contact or after ~11s).
 all voltfuse     — Alias.
 all exploder     — Alias.
 all exploders    — Alias.
