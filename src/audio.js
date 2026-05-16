@@ -53,10 +53,12 @@ export function primeAudio() {
   const c = getCtx();
   if (c && c.state === "suspended") c.resume();
   // Preload sample assets so the first shot doesn't drop while we fetch.
-  loadBuffer("./assets/sfx/gunshot.mp3");
+  loadBuffer(GUNSHOT_URL);
+  loadBuffer(KNIFE_URL);
 }
 
 const GUNSHOT_URL = "./assets/sfx/gunshot.mp3";
+const KNIFE_URL = "./assets/sfx/knife.mp3";
 
 export function setMasterVolume(v) {
   getCtx();
@@ -112,7 +114,7 @@ export function playShoot(weaponId, gainMul = 1) {
     case "rocket":   playRocketLaunch(gainMul); break;
     case "voltspike": /* sound on voltspike-chain event */ break;
     case "ripple":   /* charge weapon — sound on sonic-ring event */ break;
-    case "knife":    tone(220, "triangle", 0.08, 0.3, gainMul); break;
+    case "knife":    playBuffer(KNIFE_URL, gainMul, { peak: 0.8 }); break;
     default:         playBuffer(GUNSHOT_URL, gainMul, { detune: 0, peak: 0.55 });
   }
 }
