@@ -475,6 +475,7 @@ function onZombieDeath(sim, z, killer, opts = {}) {
     if (z.kind === "sprinter") reward = 40;
     else if (z.kind === "brute") reward = 40;
     else if (z.kind === "volt-fuse") reward = opts.fuseTipKill ? 60 : 30;
+    if (killer.doubleMoney) reward *= 2;
     killer.cash += reward;
     killer.score += 1;
     sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon });
@@ -511,7 +512,7 @@ function damageZombie(sim, z, dmg, attacker, opts = {}) {
       if (plate.hp <= 0) {
         plate.alive = false;
         plate.hp = 0;
-        if (attacker) attacker.cash += 20;
+        if (attacker) attacker.cash += attacker.doubleMoney ? 40 : 20;
       }
     } else {
       z.hp -= dmg;

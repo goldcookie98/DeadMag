@@ -67,6 +67,13 @@ export function applyCheat(code, { sim, localId }) {
       me.oneShot = !me.oneShot;
       return { ok: true, message: me.oneShot ? "one-shot kills ON." : "one-shot kills OFF." };
 
+    case "double money":
+    case "doublemoney":
+    case "2x money":
+    case "2x cash":
+      me.doubleMoney = !me.doubleMoney;
+      return { ok: true, message: me.doubleMoney ? "double money ON." : "double money OFF." };
+
     case "all normal":
     case "normal horde":
       sim.forceZombieKind = null;

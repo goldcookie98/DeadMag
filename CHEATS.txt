@@ -21,6 +21,12 @@ oneshot          — Alias.
 1shot            — Alias.
 instakill        — Alias.
 
+double money     — Toggle 2× cash from zombie kills (also doubles the
+                   per-plate bonus from cracking brute armor).
+doublemoney      — Alias.
+2x money         — Alias.
+2x cash          — Alias.
+
 all normal       — Stop forcing a zombie type; spawns return to the
                    normal wave-based mix.
 normal horde     — Alias for "all normal".
