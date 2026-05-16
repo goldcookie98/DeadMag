@@ -41,16 +41,22 @@ export function render(ctx, sim, camera, localId, mouse) {
   drawBlood(ctx, sim.timeMs);
 
   for (const e of sim.explosions) drawExplosion(ctx, e, sim.timeMs);
+  if (sim.sonicRings) drawSonicRings(ctx, sim.sonicRings, sim.timeMs);
 
   for (const z of sim.zombies) drawZombie(ctx, z);
+  drawStaggerEffects(ctx, sim.zombies, sim.timeMs);
 
   for (const [, p] of sim.players) {
     if (p.state === "dead") continue;
     if (p.state === "down") drawDownedPlayer(ctx, p, p.id === localId, sim.timeMs);
     else drawPlayer(ctx, p, p.id === localId);
+    if (p.state === "alive" && p.weapon === "ripple" && p.chargingSince) {
+      drawRippleCharge(ctx, p, sim.timeMs);
+    }
   }
 
   drawBullets(ctx, sim.bullets);
+  if (sim.chainBolts) drawChainBolts(ctx, sim.chainBolts, sim.timeMs);
   drawMuzzleFlashes(ctx);
   drawHitSparks(ctx);
 
@@ -167,6 +173,135 @@ function drawGrid(ctx, camera) {
   ctx.stroke();
 }
 
+function drawChainBolts(ctx, bolts, timeMs) {
+  if (!bolts || bolts.length === 0) return;
+  for (const bolt of bolts) {
+    const age = (timeMs - bolt.t) / bolt.duration;
+    if (age >= 1) continue;
+    const fade = 1 - age;
+    const pts = bolt.points;
+    if (!pts || pts.length < 2) continue;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const px = -dy / len, py = dx / len;
+      const segs = 8;
+      const path = [];
+      path.push({ x: a.x, y: a.y });
+      for (let s = 1; s < segs; s++) {
+        const t = s / segs;
+        const jit = (Math.random() - 0.5) * 16;
+        path.push({ x: a.x + dx * t + px * jit, y: a.y + dy * t + py * jit });
+      }
+      path.push({ x: b.x, y: b.y });
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = VOLT.cyan;
+      ctx.strokeStyle = VOLT.cyan;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let k = 1; k < path.length; k++) ctx.lineTo(path[k].x, path[k].y);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = VOLT.fg;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawSonicRings(ctx, rings, timeMs) {
+  if (!rings || rings.length === 0) return;
+  for (const ring of rings) {
+    const age = (timeMs - ring.t) / ring.duration;
+    if (age >= 1) continue;
+    const fade = 1 - age;
+    const layers = [
+      { lag: 0,    color: VOLT.acid, baseW: 4, blur: 14 },
+      { lag: 0.09, color: "rgba(182,255,46,0.5)", baseW: 3, blur: 8 },
+      { lag: 0.18, color: "rgba(244,236,255,0.7)", baseW: 2, blur: 6 },
+    ];
+    ctx.save();
+    for (const L of layers) {
+      const localAge = age - L.lag;
+      if (localAge <= 0 || localAge >= 1) continue;
+      const r = Math.max(1, ring.r * localAge);
+      const w = Math.max(1, L.baseW * (1 - localAge));
+      ctx.globalAlpha = fade;
+      ctx.shadowBlur = L.blur;
+      ctx.shadowColor = VOLT.acid;
+      ctx.strokeStyle = L.color;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawRippleCharge(ctx, p, timeMs) {
+  const w = WEAPONS.ripple;
+  const dur = Math.max(0, timeMs - p.chargingSince);
+  const ratio = Math.min(1, dur / w.chargeMaxMs);
+  const blastR = w.range * ratio;
+  ctx.save();
+  // Translucent disc showing the upcoming blast radius.
+  ctx.globalAlpha = 0.12 + 0.10 * ratio;
+  ctx.fillStyle = VOLT.acid;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, Math.max(6, blastR), 0, Math.PI * 2);
+  ctx.fill();
+  // Outer ring.
+  ctx.globalAlpha = 0.8;
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 2 + ratio * 2;
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = VOLT.acid;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, Math.max(6, blastR), 0, Math.PI * 2);
+  ctx.stroke();
+  // Charge arc near the player so the user can read progress at a glance.
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = ratio >= 1 ? VOLT.fg : VOLT.acid;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 22, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawStaggerEffects(ctx, zombies, timeMs) {
+  for (const z of zombies) {
+    if (!z.staggeredUntil || timeMs >= z.staggeredUntil) continue;
+    const r = (z.radius || 13) + 4;
+    ctx.save();
+    ctx.strokeStyle = VOLT.acid;
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 3; i++) {
+      const phase = timeMs * 0.012 + i * (Math.PI * 2 / 3);
+      ctx.beginPath();
+      for (let a = 0; a < Math.PI * 2; a += 0.4) {
+        const wob = 1 + Math.sin(a * 4 + phase) * 0.12;
+        const x = z.x + Math.cos(a) * r * wob;
+        const y = z.y + Math.sin(a) * r * wob;
+        if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 function drawWalls(ctx) {
   for (const w of WALLS) {
     ctx.fillStyle = VOLT.surface;
@@ -249,6 +384,30 @@ function drawWeaponNotch(ctx, weapon, r) {
       ctx.lineTo(r + 12, 0);
       ctx.lineTo(r + 2, 2);
       ctx.closePath();
+      ctx.fill();
+      break;
+    case "voltspike":
+      ctx.fillStyle = base; ctx.fillRect(r - 3, -3, 16, 6);
+      ctx.fillStyle = VOLT.cyan;
+      ctx.fillRect(r + 13, -1.5, 4, 3);
+      ctx.strokeStyle = VOLT.cyan;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(r - 1, -3); ctx.lineTo(r + 1, -5);
+      ctx.lineTo(r + 3, -3); ctx.lineTo(r + 5, -5);
+      ctx.lineTo(r + 7, -3); ctx.lineTo(r + 9, -5);
+      ctx.stroke();
+      break;
+    case "ripple":
+      ctx.fillStyle = base; ctx.fillRect(r - 3, -4, 14, 8);
+      ctx.strokeStyle = VOLT.acid;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(r + 14, 0, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(r + 14, 0, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = VOLT.acid;
       ctx.fill();
       break;
     default:

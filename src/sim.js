@@ -48,6 +48,7 @@ export function makePlayer(name, color, isBot = false) {
     reloadingUntil: 0,
     reloadDuration: 0,
     lastShotAt: 0,
+    chargingSince: 0,
     cash: 0,
     lives: 3,
     alive: true,
@@ -146,6 +147,8 @@ export function createSim(mode = "horde") {
     zombies: [],
     bullets: [],
     explosions: [],
+    chainBolts: [],
+    sonicRings: [],
     pickups: [],
     inputs: new Map(),
     wave: 0,
@@ -193,7 +196,7 @@ export function serializeSim(sim) {
       hp: p.hp, maxHp: p.maxHp, armor: p.armor,
       weapon: p.weapon, inventory: p.inventory,
       ammo: p.ammo, reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
-      lastShotAt: p.lastShotAt,
+      lastShotAt: p.lastShotAt, chargingSince: p.chargingSince,
       cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
       state: p.state, deathAt: p.deathAt, downedAt: p.downedAt,
       bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
@@ -210,6 +213,8 @@ export function serializeSim(sim) {
     zombies: sim.zombies,
     bullets: sim.bullets,
     explosions: sim.explosions,
+    chainBolts: sim.chainBolts,
+    sonicRings: sim.sonicRings,
     pickups: sim.pickups,
     wave: sim.wave,
     waveActive: sim.waveActive,
@@ -296,6 +301,9 @@ function segIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
 
 function tryShoot(sim, p, input) {
   const w = WEAPONS[p.weapon];
+  // Charge weapons (RIPPLE) are driven by the hold/release state machine
+  // in updateCharges — tryShoot is a no-op for them.
+  if (w.kind === "charge") return;
   const now = sim.timeMs;
   if (now < p.reloadingUntil) return;
   if (w.kind !== "melee" && p.ammo <= 0) {
@@ -516,7 +524,14 @@ function damageZombie(sim, z, dmg, attacker, opts = {}) {
   if (z.kind === "brute") {
     const aliveIdxs = [];
     for (let i = 0; i < z.plates.length; i++) if (z.plates[i].alive) aliveIdxs.push(i);
-    if (aliveIdxs.length > 0) {
+    if (opts.pierceArmor && aliveIdxs.length > 0) {
+      // Voltspike pierce: full damage to body AND destroy one plate per hit.
+      z.hp -= dmg;
+      const plate = z.plates[aliveIdxs[0]];
+      plate.alive = false;
+      plate.hp = 0;
+      if (attacker) attacker.cash += attacker.doubleMoney ? 40 : 20;
+    } else if (aliveIdxs.length > 0) {
       z.hp -= dmg * (1 - BRUTE_PLATE_ABSORB);
       const pi = aliveIdxs[Math.floor(Math.random() * aliveIdxs.length)];
       const plate = z.plates[pi];
@@ -563,6 +578,106 @@ function detonateVoltFuse(sim, z, attacker, opts = {}) {
     }
   }
   onZombieDeath(sim, z, attacker, { fuseTipKill: !!opts.fuseTipKill });
+}
+
+// Voltspike chain: starting from `firstHit`, daisy-chain to the nearest
+// unhit zombie within chainRange, up to chainCount links. Each link does
+// dmg * chainDmgMul^link and pierces brute armor. Pushes a chainBolt
+// effect into sim.chainBolts for the renderer.
+function fireVoltspikeChain(sim, firstHit, baseDmg, attacker) {
+  const w = WEAPONS.voltspike;
+  const points = [{ x: firstHit.x, y: firstHit.y }];
+  const hitSet = new Set([firstHit.id]);
+  damageZombie(sim, firstHit, baseDmg, attacker, { pierceArmor: true });
+  let prev = firstHit;
+  for (let link = 1; link <= w.chainCount; link++) {
+    let next = null, bestD2 = (w.chainRange * w.chainRange);
+    for (const z of sim.zombies) {
+      if (hitSet.has(z.id)) continue;
+      if (z.detonating) continue;
+      const dx = z.x - prev.x, dy = z.y - prev.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) { bestD2 = d2; next = z; }
+    }
+    if (!next) break;
+    hitSet.add(next.id);
+    points.push({ x: next.x, y: next.y });
+    const dmg = baseDmg * Math.pow(w.chainDmgMul, link);
+    damageZombie(sim, next, dmg, attacker, { pierceArmor: true });
+    prev = next;
+  }
+  sim.chainBolts.push({ points, t: sim.timeMs, duration: 280 });
+}
+
+// Drives the RIPPLE hold-to-charge state machine for every player each tick.
+// Records `chargingSince` on press, evaluates duration on release, and emits
+// a sonic ring + damage if the charge crossed `chargeMinMs`. Tap-fires under
+// minimum cancel without consuming a mag.
+function updateCharges(sim) {
+  for (const [, p] of sim.players) {
+    const w = WEAPONS[p.weapon];
+    if (!w || w.kind !== "charge") {
+      if (p.chargingSince) p.chargingSince = 0;
+      continue;
+    }
+    if (p.state !== "alive") {
+      p.chargingSince = 0;
+      continue;
+    }
+    const input = sim.inputs.get(p.id);
+    const shoot = !!input?.shoot;
+    const reloading = sim.timeMs < p.reloadingUntil;
+
+    if (reloading) {
+      p.chargingSince = 0;
+      continue;
+    }
+    if (p.ammo <= 0 && !shoot) {
+      // Auto-reload between shots when empty.
+      startReload(sim, p);
+      continue;
+    }
+
+    if (shoot && !p.chargingSince && p.ammo > 0) {
+      p.chargingSince = sim.timeMs;
+    } else if (!shoot && p.chargingSince) {
+      const dur = sim.timeMs - p.chargingSince;
+      p.chargingSince = 0;
+      if (dur < w.chargeMinMs) continue;
+      const ratio = Math.min(1, dur / w.chargeMaxMs);
+      const dmg = w.dmg * ratio * dmgMulFor(p);
+      const radius = w.range * ratio;
+      emitSonicRing(sim, p, dmg, radius, w.staggerMs);
+      p.ammo -= 1;
+      if (p.ammo <= 0) startReload(sim, p);
+    }
+  }
+}
+
+function emitSonicRing(sim, attacker, dmg, radius, staggerMs) {
+  const cx = attacker.x, cy = attacker.y;
+  sim.sonicRings.push({ x: cx, y: cy, r: radius, t: sim.timeMs, duration: 350 });
+  if (radius <= 0 || dmg <= 0) return;
+  for (const z of [...sim.zombies]) {
+    if (z.detonating) continue;
+    const d = Math.hypot(z.x - cx, z.y - cy);
+    if (d > radius) continue;
+    const falloff = 1 - 0.5 * (d / radius);
+    const killed = damageZombie(sim, z, dmg * falloff, attacker);
+    if (!killed) z.staggeredUntil = sim.timeMs + staggerMs;
+  }
+  // Players in arsenal/other modes (and self via splash) take damage too.
+  for (const [, op] of sim.players) {
+    if (op.state !== "alive") continue;
+    const d = Math.hypot(op.x - cx, op.y - cy);
+    if (d > radius) continue;
+    const falloff = 1 - (d / radius);
+    if (op.id === attacker.id) {
+      damagePlayer(sim, op, dmg * WEAPONS.ripple.selfDamageMul * falloff, null);
+    } else if (sim.mode === "arsenal") {
+      damagePlayer(sim, op, dmg * falloff, attacker);
+    }
+  }
 }
 
 function respawnPlayer(sim, p) {
@@ -620,6 +735,8 @@ function updateBullets(sim, dt) {
       const owner = sim.players.get(b.ownerId);
       if (b.weapon === "rocket") {
         rocketExplode(sim, nx, ny, b);
+      } else if (b.weapon === "voltspike" && hit.zombie) {
+        fireVoltspikeChain(sim, hit.zombie, b.dmg, owner);
       } else if (hit.zombie) {
         damageZombie(sim, hit.zombie, b.dmg, owner, { fuseTipHit: !!hit.fuseTip });
       } else if (hit.player) {
@@ -776,6 +893,9 @@ function updateZombies(sim, dt) {
         continue;
       }
     }
+
+    // RIPPLE stagger: zombie freezes in place (still ticks fuse logic above).
+    if (z.staggeredUntil && sim.timeMs < z.staggeredUntil) continue;
 
     const directAng = Math.atan2(target.y - z.y, target.x - z.x);
     let baseAng = directAng;
@@ -1031,6 +1151,8 @@ function updatePlayers(sim, dt) {
 
 function pruneExplosions(sim) {
   sim.explosions = sim.explosions.filter((e) => sim.timeMs - e.t < 400);
+  sim.chainBolts = sim.chainBolts.filter((b) => sim.timeMs - b.t < b.duration);
+  sim.sonicRings = sim.sonicRings.filter((r) => sim.timeMs - r.t < r.duration);
 }
 
 export function step(sim, dt) {
@@ -1044,6 +1166,7 @@ export function step(sim, dt) {
   finishReloads(sim);
   updateBots(sim, dt);
   updatePlayers(sim, dt);
+  updateCharges(sim);
   updateBullets(sim, dt);
   updateZombies(sim, dt);
   updateDowns(sim, dt);
@@ -1079,6 +1202,8 @@ export const SHOP_ITEMS = [
   { id: "buy-sniper",  name: "SNIPER",       desc: "Buy weapon.",                cost: () => 2500, canBuy: (p) => !p.inventory.sniper,  apply: (p) => { p.inventory.sniper = true; p.weapon = "sniper"; p.ammo = WEAPONS.sniper.mag; } },
   { id: "buy-rocket",  name: "ROCKET",       desc: "Buy weapon.",                cost: () => 4000, canBuy: (p) => !p.inventory.rocket,  apply: (p) => { p.inventory.rocket = true; p.weapon = "rocket"; p.ammo = WEAPONS.rocket.mag; } },
   { id: "buy-knife",   name: "KNIFE",        desc: "Buy weapon.",                cost: () => 200,  canBuy: (p) => !p.inventory.knife,   apply: (p) => { p.inventory.knife = true; } },
+  { id: "buy-voltspike", name: "VOLTSPIKE", desc: "Buy weapon.",                cost: () => 10000, canBuy: (p) => !p.inventory.voltspike, apply: (p) => { p.inventory.voltspike = true; p.weapon = "voltspike"; p.ammo = WEAPONS.voltspike.mag; } },
+  { id: "buy-ripple",    name: "RIPPLE",    desc: "Buy weapon.",                cost: () => 10000, canBuy: (p) => !p.inventory.ripple,    apply: (p) => { p.inventory.ripple = true; p.weapon = "ripple"; p.ammo = WEAPONS.ripple.mag; } },
   { id: "upg-dmg",     name: "+DAMAGE",      desc: "+15% damage per tier.",     cost: (p) => 400 + p.upgrades.dmg * 300, canBuy: (p) => p.upgrades.dmg < 5, apply: (p) => p.upgrades.dmg += 1 },
   { id: "upg-rate",    name: "+FIRE RATE",   desc: "-10% delay per tier.",      cost: (p) => 500 + p.upgrades.rate * 300, canBuy: (p) => p.upgrades.rate < 5, apply: (p) => p.upgrades.rate += 1 },
   { id: "upg-reload",  name: "+RELOAD",      desc: "-12% reload per tier.",     cost: (p) => 400 + p.upgrades.reload * 200, canBuy: (p) => p.upgrades.reload < 5, apply: (p) => p.upgrades.reload += 1 },

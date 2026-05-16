@@ -469,7 +469,7 @@ function advancePredict(dt, snap, me) {
 function tryLocalFire(snap, meAuth, nowSend) {
   if (!predictMe || meAuth.state !== "alive") return false;
   const w = WEAPONS[meAuth.weapon];
-  if (!w || w.kind === "melee") return false;
+  if (!w || w.kind === "melee" || w.kind === "charge") return false;
   const cooldownMs = w.rate ?? 100;
   const ready = nowSend - _lastLocalFireAt >= cooldownMs * 0.9
     && meAuth.ammo > 0

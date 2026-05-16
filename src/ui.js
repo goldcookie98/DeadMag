@@ -43,6 +43,32 @@ const WEAPON_SVG = {
 <rect x="100" y="32" width="6" height="14" />
 <path d="M 106 33 L 146 35 L 146 45 L 106 47 Z" />
 </svg>`,
+  voltspike: `<svg viewBox="0 0 160 80" preserveAspectRatio="xMidYMid meet" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
+<rect x="14" y="34" width="20" height="10" />
+<rect x="34" y="32" width="60" height="14" />
+<path d="M 38 30 L 42 26 L 46 30 L 50 26 L 54 30 L 58 26 L 62 30 L 66 26 L 70 30 L 74 26 L 78 30 L 82 26 L 86 30 L 90 26" stroke="var(--cyan)" stroke-width="1.6" />
+<path d="M 72 30 L 80 39 L 72 48 L 64 39 Z" fill="var(--cyan)" stroke="var(--cyan)" />
+<path d="M 94 32 L 110 26" stroke="var(--cyan)" stroke-width="1.8" />
+<path d="M 94 46 L 110 52" stroke="var(--cyan)" stroke-width="1.8" />
+<circle cx="112" cy="39" r="3" fill="var(--cyan)" stroke="var(--cyan)" />
+<path d="M 114 39 L 122 34 L 118 42 L 130 38 L 124 46 L 138 42" stroke="var(--cyan)" stroke-width="1.2" opacity="0.9" />
+<path d="M 64 46 L 68 70 L 78 70 L 82 46 Z" />
+<path d="M 76 46 C 76 56, 82 56, 84 46" />
+</svg>`,
+  ripple: `<svg viewBox="0 0 160 80" preserveAspectRatio="xMidYMid meet" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
+<rect x="22" y="34" width="20" height="10" />
+<rect x="42" y="32" width="56" height="14" />
+<path d="M 50 38 L 60 38 M 64 38 L 74 38 M 78 38 L 88 38" stroke="var(--acid)" opacity="0.5" />
+<rect x="72" y="26" width="8" height="6" />
+<circle cx="118" cy="39" r="20" />
+<circle cx="118" cy="39" r="14" stroke="var(--acid)" opacity="0.7" />
+<circle cx="118" cy="39" r="8" stroke="var(--acid)" />
+<circle cx="118" cy="39" r="3" fill="var(--acid)" stroke="var(--acid)" />
+<path d="M 140 26 Q 148 30, 148 39 Q 148 48, 140 52" stroke="var(--acid)" opacity="0.45" />
+<path d="M 146 22 Q 156 28, 156 39 Q 156 50, 146 56" stroke="var(--acid)" opacity="0.25" />
+<path d="M 60 46 L 64 70 L 74 70 L 78 46 Z" />
+<path d="M 76 46 C 76 56, 82 56, 84 46" />
+</svg>`,
 };
 
 const UPGRADE_META = {
@@ -420,12 +446,13 @@ export class UI {
   }
 
   _buildShopSections(player, items) {
-    const weaponIds = ["buy-shotgun", "buy-smg", "buy-sniper", "buy-rocket", "buy-knife"];
+    const weaponIds = ["buy-shotgun", "buy-smg", "buy-sniper", "buy-rocket", "buy-knife", "buy-voltspike", "buy-ripple"];
     const upgradeIds = ["upg-dmg", "upg-rate", "upg-reload", "upg-speed"];
     const supplyIds = ["heal", "armor", "life", "revive"];
 
     const weaponMap = new Map([
       ["buy-shotgun", "shotgun"], ["buy-smg", "smg"], ["buy-sniper", "sniper"], ["buy-rocket", "rocket"], ["buy-knife", "knife"],
+      ["buy-voltspike", "voltspike"], ["buy-ripple", "ripple"],
     ]);
 
     const byId = new Map(items.map((e) => [e.it.id, e]));
