@@ -25,6 +25,7 @@ export class Input {
     this.escapePressed = false;
     this.autoFire = false;
     this.weaponSlot = -1;
+    this.quickSwapPressed = false;
     this._enabled = true;
 
     window.addEventListener("keydown", (e) => {
@@ -34,6 +35,7 @@ export class Input {
       if (KEYS.reload.has(e.code)) this.reloadPressed = true;
       if (KEYS.escape.has(e.code)) this.escapePressed = true;
       if (!wasDown && e.code === "KeyE") this.autoFire = !this.autoFire;
+      if (!wasDown && e.code === "KeyQ") this.quickSwapPressed = true;
       if (!wasDown) {
         const slot = digitSlot(e.code);
         if (slot >= 0) this.weaponSlot = slot;
@@ -70,6 +72,7 @@ export class Input {
   consumeEscape() { const v = this.escapePressed; this.escapePressed = false; return v; }
   consumeClick() { const v = this.mouse.clicked; this.mouse.clicked = false; return v; }
   consumeWeaponSlot() { const v = this.weaponSlot; this.weaponSlot = -1; return v; }
+  consumeQuickSwap() { const v = this.quickSwapPressed; this.quickSwapPressed = false; return v; }
 
   snapshot(camera) {
     let mx = 0, my = 0;

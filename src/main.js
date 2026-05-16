@@ -74,6 +74,10 @@ let _lastLocalFireAt = 0;      // gates client-side muzzle flash + ghost bullets
 // range, mirroring server bullet life. The server's copy of *our own*
 // bullets is filtered from the rendered snapshot so we only ever see one.
 let ghostBullets = [];
+// Q-swap memory: when the local player's weapon changes, the prior value is
+// stashed here so Q can flip back to it.
+let _prevWeapon = null;
+let _lastSeenWeapon = null;
 
 const CONNECTING_TIMEOUT_MS = 30_000;
 let _connectingDeadline = null;
@@ -259,6 +263,8 @@ function setupMpHandlers() {
     _lastSentReload = false;
     _lastLocalFireAt = 0;
     ghostBullets = [];
+    _prevWeapon = null;
+    _lastSeenWeapon = null;
     // Hold the connecting overlay up until the first state snapshot
     // lands, so the player doesn't see an empty map.
     startConnectingWatch();
@@ -397,6 +403,8 @@ function leaveToMenu() {
   stateBuffer = [];
   renderClockReady = false;
   ghostBullets = [];
+  _prevWeapon = null;
+  _lastSeenWeapon = null;
   state = "menu";
   ui.showOnly("menu");
   ui.setNetStatus("");
@@ -579,14 +587,25 @@ function frame(now) {
 
   if (state === "playing" && sim) {
     const snap = input.snapshot(camera);
+    const me = sim.players.get(localId);
+    if (me && me.weapon !== _lastSeenWeapon) {
+      if (_lastSeenWeapon != null) _prevWeapon = _lastSeenWeapon;
+      _lastSeenWeapon = me.weapon;
+    }
     const slot = input.consumeWeaponSlot();
     if (slot >= 0 && slot < ARSENAL_ORDER.length) {
       const wid = ARSENAL_ORDER[slot];
-      const me = sim.players.get(localId);
       const owned = wid === "pistol" || !!me?.inventory?.[wid];
       if (me && me.state === "alive" && owned && me.weapon !== wid) {
         if (mp) mp.sendEquip(wid);
         else switchWeapon(sim, localId, wid);
+      }
+    }
+    if (input.consumeQuickSwap() && me && me.state === "alive" && _prevWeapon && _prevWeapon !== me.weapon) {
+      const owned = _prevWeapon === "pistol" || !!me.inventory?.[_prevWeapon];
+      if (owned) {
+        if (mp) mp.sendEquip(_prevWeapon);
+        else switchWeapon(sim, localId, _prevWeapon);
       }
     }
     const online = !!mp;
