@@ -449,6 +449,7 @@ function startReload(sim, p) {
   const dur = w.reload * reloadMulFor(p);
   p.reloadDuration = dur;
   p.reloadingUntil = sim.timeMs + dur;
+  sim.events.push({ type: "reload-start", playerId: p.id, weapon: p.weapon, x: p.x, y: p.y });
 }
 
 function finishReloads(sim) {

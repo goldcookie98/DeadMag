@@ -55,10 +55,12 @@ export function primeAudio() {
   // Preload sample assets so the first shot doesn't drop while we fetch.
   loadBuffer(GUNSHOT_URL);
   loadBuffer(KNIFE_URL);
+  loadBuffer(RELOAD_PISTOL_URL);
 }
 
 const GUNSHOT_URL = "./assets/sfx/gunshot.mp3";
 const KNIFE_URL = "./assets/sfx/knife.mp3";
+const RELOAD_PISTOL_URL = "./assets/sfx/reload-pistol.mp3";
 
 export function setMasterVolume(v) {
   getCtx();
@@ -103,6 +105,17 @@ function noiseBurst(dur, filterFreq, q, peak = 0.5, gainMul = 1) {
   env(g, c, 0.004, 0.005, dur, peak * gainMul);
   src.start();
   src.stop(c.currentTime + dur + 0.05);
+}
+
+export function playReload(weaponId, gainMul = 1) {
+  switch (weaponId) {
+    case "pistol":
+      playBuffer(RELOAD_PISTOL_URL, gainMul, { peak: 0.8 });
+      break;
+    default:
+      // No reload sound for other weapons yet.
+      break;
+  }
 }
 
 export function playShoot(weaponId, gainMul = 1) {

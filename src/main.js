@@ -749,6 +749,8 @@ function processEvents(sim) {
       ui.pushKillFeed(`<span class="pname" style="color:${kc}">${escapeHtml(k?.name ?? "—")}</span> ▸ <span class="wchip">${escapeHtml(wn)}</span> ${escapeHtml(v ?? "—")}`);
     } else if (e.type === "shoot") {
       audio.playShoot(e.weapon, spatial(e.x, e.y));
+    } else if (e.type === "reload-start") {
+      audio.playReload(e.weapon, spatial(e.x, e.y));
     } else if (e.type === "explosion") {
       audio.playExplosion(spatial(e.x, e.y));
     } else if (e.type === "voltfuse-boom") {
