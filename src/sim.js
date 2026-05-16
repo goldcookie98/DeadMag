@@ -691,6 +691,30 @@ function updateFlowFields(sim) {
   }
 }
 
+// Push zombies out of alive players so they can't physically overlap.
+// Only the zombie moves (players steer themselves with their own input).
+// Pathing pulls the zombie back next tick — net effect is they bump the
+// player's hitbox instead of standing inside it.
+function separateZombiesFromPlayers(sim) {
+  for (const z of sim.zombies) {
+    if (z.detonating) continue;
+    for (const [, p] of sim.players) {
+      if (p.state !== "alive") continue;
+      const dx = z.x - p.x, dy = z.y - p.y;
+      const min = z.radius + PLAYER_R;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= min * min) continue;
+      if (d2 === 0) {
+        moveWithCollisions(z, z.radius, 0.5, 0);
+        continue;
+      }
+      const d = Math.sqrt(d2);
+      const overlap = min - d;
+      moveWithCollisions(z, z.radius, (dx / d) * overlap, (dy / d) * overlap);
+    }
+  }
+}
+
 // Pairwise zombie separation. O(N²) but N is bounded — zombie counts stay
 // small enough that this is fine. Pushes overlapping pairs apart via
 // moveWithCollisions so the wall solver still wins if separation would
@@ -795,6 +819,32 @@ function updateZombies(sim, dt) {
     }
   }
   separateZombies(sim);
+  separateZombiesFromPlayers(sim);
+}
+
+// Picks a random spawn point along the map perimeter. Tries to avoid
+// landing on a wall (with a small margin) by retrying; falls back to
+// the curated ZOMBIE_SPAWNS list if every random pick is blocked.
+function pickZombieSpawn(sim) {
+  const margin = 60;
+  const minPlayerDist = 320;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const side = Math.floor(Math.random() * 4);
+    let x, y;
+    if (side === 0) { x = margin + Math.random() * (MAP_W - margin * 2); y = margin; }
+    else if (side === 1) { x = MAP_W - margin; y = margin + Math.random() * (MAP_H - margin * 2); }
+    else if (side === 2) { x = margin + Math.random() * (MAP_W - margin * 2); y = MAP_H - margin; }
+    else { x = margin; y = margin + Math.random() * (MAP_H - margin * 2); }
+    if (collideCircleWalls(x, y, ZOMBIE_R)) continue;
+    let tooClose = false;
+    for (const [, p] of sim.players) {
+      if (p.state !== "alive") continue;
+      if (Math.hypot(p.x - x, p.y - y) < minPlayerDist) { tooClose = true; break; }
+    }
+    if (tooClose) continue;
+    return { x, y };
+  }
+  return ZOMBIE_SPAWNS[Math.floor(Math.random() * ZOMBIE_SPAWNS.length)];
 }
 
 function pickDetourSide(ent, r, baseAng) {
@@ -866,7 +916,7 @@ function updateHorde(sim) {
       fromPack = true;
     } else {
       kind = pickZombieKind(sim);
-      const sp = ZOMBIE_SPAWNS[Math.floor(Math.random() * ZOMBIE_SPAWNS.length)];
+      const sp = pickZombieSpawn(sim);
       sx = sp.x; sy = sp.y;
       if (kind === "sprinter" && sim.zombiesToSpawn >= 3) {
         const packSize = Math.min(sim.zombiesToSpawn, 3 + Math.floor(Math.random() * 4));
