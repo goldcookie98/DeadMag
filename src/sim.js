@@ -99,6 +99,7 @@ export function makePlayer(name, color, isBot = false) {
     crateOpenedAt: 0,
     crateResult: null,
     crateBlowUp: false,
+    crateResultPending: null,
     cash: 0,
     lives: 3,
     alive: true,
@@ -256,6 +257,7 @@ export function serializeSim(sim) {
       ammo: p.ammo, reloadingUntil: p.reloadingUntil, reloadDuration: p.reloadDuration,
       lastShotAt: p.lastShotAt, chargingSince: p.chargingSince,
       crateOpenedAt: p.crateOpenedAt, crateResult: p.crateResult, crateBlowUp: p.crateBlowUp,
+      crateResultPending: p.crateResultPending,
       cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
       state: p.state, deathAt: p.deathAt, downedAt: p.downedAt,
       bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
@@ -410,6 +412,7 @@ function tryShoot(sim, p, input) {
     return;
   }
 
+  sim.events.push({ type: "shoot", playerId: p.id, weapon: p.weapon, x: p.x, y: p.y });
   const pellets = w.pellets || 1;
   const packed = !!p.slotPacked[p.activeSlot];
   const bursts = p.noDelay ? 10 : 1;
@@ -577,6 +580,7 @@ export function shopRevive(sim, playerId) {
 
 function onZombieDeath(sim, z, killer, opts = {}) {
   sim.zombies = sim.zombies.filter((zz) => zz !== z);
+  sim.events.push({ type: "zombie-die", kind: z.kind, x: z.x, y: z.y });
   if (killer) {
     let reward = 20;
     if (z.kind === "sprinter") reward = 40;
@@ -585,7 +589,7 @@ function onZombieDeath(sim, z, killer, opts = {}) {
     if (killer.doubleMoney) reward *= 2;
     killer.cash += reward;
     killer.score += 1;
-    sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon });
+    sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon, zombieKind: z.kind });
   }
 }
 
@@ -644,6 +648,7 @@ function detonateVoltFuse(sim, z, attacker, opts = {}) {
   if (z.detonating) return;
   z.detonating = true;
   sim.explosions.push({ x: z.x, y: z.y, r: VOLT_FUSE_SPLASH_R, t: sim.timeMs });
+  sim.events.push({ type: "voltfuse-boom", x: z.x, y: z.y });
   // Friendly fire: damage other zombies in radius (chain detonations possible).
   for (const other of [...sim.zombies]) {
     if (other === z) continue;
@@ -697,6 +702,7 @@ function fireVoltspikeChain(sim, firstHit, baseDmg, attacker, packed) {
     prev = next;
   }
   sim.chainBolts.push({ points, t: sim.timeMs, duration: 280 });
+  sim.events.push({ type: "voltspike-chain", x: firstHit.x, y: firstHit.y });
 }
 
 // Drives the RIPPLE hold-to-charge state machine for every player each tick.
@@ -750,6 +756,7 @@ function updateCharges(sim) {
 function emitSonicRing(sim, attacker, dmg, radius, staggerMs) {
   const cx = attacker.x, cy = attacker.y;
   sim.sonicRings.push({ x: cx, y: cy, r: radius, t: sim.timeMs, duration: 350 });
+  sim.events.push({ type: "sonic-ring", x: cx, y: cy, r: radius });
   if (radius <= 0 || dmg <= 0) return;
   for (const z of [...sim.zombies]) {
     if (z.detonating) continue;
@@ -861,6 +868,7 @@ function rocketExplode(sim, x, y, b) {
   } : baseW;
   const owner = sim.players.get(b.ownerId);
   sim.explosions.push({ x, y, r: w.splashR, t: sim.timeMs });
+  sim.events.push({ type: "explosion", x, y, r: w.splashR });
   for (const z of [...sim.zombies]) {
     const d = Math.hypot(z.x - x, z.y - y);
     if (d <= w.splashR) {
@@ -1238,9 +1246,6 @@ function updateBots(sim, dt) {
 function updatePlayers(sim, dt) {
   for (const [, p] of sim.players) {
     if (!p.alive) continue;
-    // While the crate animation is playing the player is locked into the
-    // result reveal — no shooting/reload/moving inputs apply.
-    if (p.crateOpenedAt) continue;
     const input = sim.inputs.get(p.id);
     if (!input) continue;
     const speed = moveSpeedFor(p);
@@ -1300,8 +1305,17 @@ function grantWeaponToActiveOrEmpty(sim, p, weaponId) {
   p.chargingSince = 0;
 }
 
+function acceptCrateResult(sim, p) {
+  if (!p.crateResultPending) return;
+  const wid = p.crateResultPending;
+  grantWeaponToActiveOrEmpty(sim, p, wid);
+  p.crateResultPending = null;
+  sim.events.push({ type: "crate-take", playerId: p.id, weapon: wid });
+}
+
 function openCrate(sim, p) {
   if (p.crateOpenedAt) return;
+  if (p.crateResultPending) return;
   if (p.cash < CRATE_COST) return;
   p.cash -= CRATE_COST;
   const roll = Math.random();
@@ -1362,7 +1376,10 @@ function updateInteractions(sim) {
     const input = sim.inputs.get(p.id);
     if (!input?.interact) continue;
     const target = pickInteractTarget(sim, p);
-    if (target === "crate") openCrate(sim, p);
+    if (target === "crate") {
+      if (p.crateResultPending) acceptCrateResult(sim, p);
+      else openCrate(sim, p);
+    }
     else if (target === "barricade") buyBarricade(sim, p);
     else if (target === "pap") packCurrentWeapon(sim, p);
     // Consume the edge so subsequent ticks (which may still see the same
@@ -1378,11 +1395,16 @@ function updateCrateAnims(sim) {
     if (sim.timeMs - p.crateOpenedAt < CRATE_ANIM_MS) continue;
     // Apply result.
     if (p.crateBlowUp) {
+      const sp = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
+      p.x = sp.x; p.y = sp.y;
       damagePlayer(sim, p, CRATE_BLOW_UP_DMG, null);
-      sim.events.push({ type: "crate-blowup", playerId: p.id });
+      const cc = rectCenter(CRATE);
+      sim.explosions.push({ x: cc.x, y: cc.y, r: 110, t: sim.timeMs });
+      sim.events.push({ type: "crate-blowup", playerId: p.id, x: p.x, y: p.y });
+      sim.events.push({ type: "explosion", x: cc.x, y: cc.y, r: 110 });
     } else if (p.crateResult) {
-      grantWeaponToActiveOrEmpty(sim, p, p.crateResult);
-      sim.events.push({ type: "crate-grant", playerId: p.id, weapon: p.crateResult });
+      p.crateResultPending = p.crateResult;
+      sim.events.push({ type: "crate-ready", playerId: p.id, weapon: p.crateResult });
     }
     p.crateOpenedAt = 0;
     p.crateResult = null;

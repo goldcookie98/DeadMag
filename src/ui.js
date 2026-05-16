@@ -319,72 +319,11 @@ export class UI {
     this.el.invGrid.innerHTML = cells.join("");
   }
 
-  _renderCrateOverlay(crate) {
-    let el = document.getElementById("crate-overlay");
-    if (!crate) {
-      if (el) el.style.display = "none";
-      this._crateAnimTarget = null;
-      return;
-    }
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "crate-overlay";
-      el.innerHTML = `
-        <div class="crate-overlay-inner">
-          <div class="crate-tag">// SUPPLY CRATE</div>
-          <div class="crate-window">
-            <div class="crate-strip" id="crate-strip"></div>
-            <div class="crate-pointer"></div>
-          </div>
-          <div class="crate-status" id="crate-status">OPENING…</div>
-        </div>`;
-      document.body.appendChild(el);
-    }
-    el.style.display = "flex";
-    const elapsed = Math.max(0, (crate.timeMs ?? 0) - crate.openedAt);
-    const total = crate.durationMs || 3500;
-    const ratio = Math.max(0, Math.min(1, elapsed / total));
-    const reveal = ratio >= 1;
-    // Rebuild the strip once per open.
-    if (this._crateAnimTarget !== crate.openedAt) {
-      this._crateAnimTarget = crate.openedAt;
-      const strip = el.querySelector("#crate-strip");
-      const pool = ["pistol", "shotgun", "smg", "sniper", "rocket", "knife", "voltspike", "ripple"];
-      // 40 slots; the target lands at index 34 (so the strip slides ~85% across).
-      const items = [];
-      const targetIdx = 34;
-      for (let i = 0; i < 40; i++) {
-        let wid;
-        if (i === targetIdx) wid = crate.blowUp ? "BLOWUP" : (crate.result || "pistol");
-        else wid = pool[Math.floor(Math.random() * pool.length)];
-        items.push(wid);
-      }
-      strip.dataset.targetIdx = String(targetIdx);
-      strip.innerHTML = items.map((wid) => {
-        if (wid === "BLOWUP") {
-          return `<div class="crate-cell danger"><div class="crate-cell-art">⚠</div><div class="crate-cell-name">BOOM</div></div>`;
-        }
-        return `<div class="crate-cell"><div class="crate-cell-art">${WEAPON_SVG[wid] || ""}</div><div class="crate-cell-name">${WEAPONS[wid]?.name || wid}</div></div>`;
-      }).join("");
-    }
-    const strip = el.querySelector("#crate-strip");
-    const status = el.querySelector("#crate-status");
-    const cellW = 130; // matches CSS
-    const targetIdx = parseInt(strip.dataset.targetIdx || "34", 10);
-    const finalOffset = targetIdx * cellW;
-    // Ease-out cubic for the slide.
-    const eased = 1 - Math.pow(1 - ratio, 3);
-    const offset = eased * finalOffset;
-    strip.style.transform = `translateX(${-offset}px)`;
-    if (status) {
-      if (reveal) {
-        if (crate.blowUp) { status.textContent = "BOOBY TRAP!"; status.className = "crate-status danger"; }
-        else if (crate.result) { status.textContent = `${WEAPONS[crate.result]?.name || crate.result.toUpperCase()} ACQUIRED`; status.className = "crate-status ok"; }
-      } else {
-        status.textContent = "OPENING…";
-        status.className = "crate-status";
-      }
-    }
+  _renderCrateOverlay(_crate) {
+    // The CS:GO-style spin is now rendered in the world canvas above the
+    // crate (see render.js). Hide the legacy fullscreen overlay if present.
+    const legacy = document.getElementById("crate-overlay");
+    if (legacy) legacy.style.display = "none";
   }
 
   _renderSquadHud(squad) {

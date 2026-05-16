@@ -349,26 +349,138 @@ function drawProps(ctx, sim, localId) {
   drawCrate(ctx, CRATE, sim.timeMs);
   drawPap(ctx, PAP, sim?.wave ?? 0, sim.timeMs);
 
-  // Proximity F-prompts for the local player.
   const me = sim.players.get(localId);
+
+  // The CS:GO-style spin renders above the crate (in world coords) so it
+  // doesn't lock the screen.
+  for (const [, p] of sim.players) {
+    if (p.crateOpenedAt) drawCrateSpin(ctx, p, sim.timeMs);
+  }
+  // Floating "TAKE [WEAPON]" reward above the crate for any player with a
+  // pending pickup.
+  for (const [, p] of sim.players) {
+    if (p.crateResultPending && p.id === localId) drawCratePending(ctx, p.crateResultPending, sim.timeMs);
+  }
+
+  // Proximity F-prompts for the local player.
   if (!me || me.state !== "alive" || me.crateOpenedAt) return;
+  const crateLabel = me.crateResultPending
+    ? `TAKE ${WEAPONS[me.crateResultPending]?.name || me.crateResultPending.toUpperCase()}`
+    : "OPEN CRATE · $950";
   const candidates = [
-    { rect: CRATE, label: "OPEN CRATE · $950", color: VOLT.yellow, canShow: me.cash >= 950 || true },
+    { rect: CRATE, label: crateLabel, color: VOLT.yellow },
     { rect: PAP, label: sim.wave < PAP_MIN_WAVE
         ? `PACK-A-PUNCH · UNLOCKS W${PAP_MIN_WAVE}`
         : (me.slotPacked?.[me.activeSlot] ? "ALREADY PACKED" : "PACK · $10,000"),
-      color: VOLT.acid, canShow: true },
+      color: VOLT.acid },
   ];
   if (!sim.barricadeDown) {
-    candidates.push({ rect: BARRICADE, label: "BREAK BARRICADE · $1,000", color: VOLT.magenta, canShow: true });
+    candidates.push({ rect: BARRICADE, label: "BREAK BARRICADE · $1,000", color: VOLT.magenta });
   }
   for (const c of candidates) {
     const cx = c.rect.x + c.rect.w / 2;
     const cy = c.rect.y + c.rect.h / 2;
     const d = Math.hypot(me.x - cx, me.y - cy);
     if (d > INTERACT_RANGE) continue;
-    drawInteractPrompt(ctx, cx, c.rect.y - 12, c.label, c.color);
+    // Lift prompt above pending reward floater so they don't overlap.
+    const yLift = (c.rect === CRATE && me.crateResultPending) ? 56 : 12;
+    drawInteractPrompt(ctx, cx, c.rect.y - yLift, c.label, c.color);
   }
+}
+
+// ────────── Crate spin (in-world CS:GO-style strip) ──────────
+const CRATE_ANIM_MS = 3500;
+const CRATE_POOL = ["pistol", "shotgun", "smg", "sniper", "rocket", "knife", "voltspike", "ripple"];
+const CRATE_SPIN_W = 360;
+const CRATE_SPIN_H = 60;
+const CRATE_CELL_W = 60;
+const CRATE_TARGET_IDX = 34;
+const CRATE_STRIP_LEN = 40;
+const _crateStrips = new Map(); // playerId → { openedAt, cells }
+
+function getCrateStripCells(playerId, openedAt, result, blowUp) {
+  const cached = _crateStrips.get(playerId);
+  if (cached && cached.openedAt === openedAt) return cached.cells;
+  const cells = [];
+  for (let i = 0; i < CRATE_STRIP_LEN; i++) {
+    if (i === CRATE_TARGET_IDX) cells.push(blowUp ? "BOOM" : (result || "pistol"));
+    else cells.push(CRATE_POOL[Math.floor(Math.random() * CRATE_POOL.length)]);
+  }
+  _crateStrips.set(playerId, { openedAt, cells });
+  return cells;
+}
+
+function drawCrateSpin(ctx, p, simTimeMs) {
+  const elapsed = Math.max(0, simTimeMs - p.crateOpenedAt);
+  const ratio = Math.max(0, Math.min(1, elapsed / CRATE_ANIM_MS));
+  const eased = 1 - Math.pow(1 - ratio, 3);
+  const finalOffset = (CRATE_TARGET_IDX * CRATE_CELL_W + CRATE_CELL_W / 2) - CRATE_SPIN_W / 2;
+  const offset = eased * finalOffset;
+  const cells = getCrateStripCells(p.id, p.crateOpenedAt, p.crateResult, p.crateBlowUp);
+
+  const cx = CRATE.x + CRATE.w / 2;
+  const boxX = cx - CRATE_SPIN_W / 2;
+  const boxY = CRATE.y - CRATE_SPIN_H - 18;
+
+  ctx.save();
+  // Backing.
+  ctx.fillStyle = "rgba(8,2,15,0.92)";
+  ctx.fillRect(boxX, boxY, CRATE_SPIN_W, CRATE_SPIN_H);
+  ctx.strokeStyle = VOLT.yellow;
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(boxX + 0.5, boxY + 0.5, CRATE_SPIN_W - 1, CRATE_SPIN_H - 1);
+
+  // Clip the strip to the box.
+  ctx.beginPath();
+  ctx.rect(boxX, boxY, CRATE_SPIN_W, CRATE_SPIN_H);
+  ctx.clip();
+
+  ctx.font = "bold 9px JetBrains Mono, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < cells.length; i++) {
+    const cellLeft = boxX + i * CRATE_CELL_W - offset;
+    if (cellLeft + CRATE_CELL_W < boxX || cellLeft > boxX + CRATE_SPIN_W) continue;
+    const wid = cells[i];
+    const isBoom = wid === "BOOM";
+    ctx.fillStyle = isBoom ? "rgba(255,31,110,0.22)" : "rgba(21,7,40,0.7)";
+    ctx.fillRect(cellLeft, boxY + 2, CRATE_CELL_W - 1, CRATE_SPIN_H - 4);
+    ctx.fillStyle = isBoom ? VOLT.magenta : VOLT.fg;
+    const name = isBoom ? "BOOM" : (WEAPONS[wid]?.name || wid).toUpperCase();
+    ctx.fillText(name, cellLeft + CRATE_CELL_W / 2, boxY + CRATE_SPIN_H / 2);
+  }
+
+  // Pointer.
+  ctx.fillStyle = VOLT.cyan;
+  ctx.shadowColor = VOLT.cyan;
+  ctx.shadowBlur = 10;
+  ctx.fillRect(boxX + CRATE_SPIN_W / 2 - 1, boxY, 2, CRATE_SPIN_H);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawCratePending(ctx, weaponId, timeMs) {
+  const cx = CRATE.x + CRATE.w / 2;
+  const cy = CRATE.y - 32;
+  const bob = Math.sin(timeMs * 0.005) * 3;
+  ctx.save();
+  ctx.font = "bold 11px JetBrains Mono, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const label = (WEAPONS[weaponId]?.name || weaponId).toUpperCase();
+  const w = Math.max(80, ctx.measureText(label).width + 24);
+  const h = 22;
+  ctx.fillStyle = "rgba(8,2,15,0.9)";
+  ctx.fillRect(cx - w / 2, cy - h / 2 + bob, w, h);
+  ctx.strokeStyle = VOLT.acid;
+  ctx.lineWidth = 1.4;
+  ctx.shadowColor = VOLT.acid;
+  ctx.shadowBlur = 10;
+  ctx.strokeRect(cx - w / 2 + 0.5, cy - h / 2 + bob + 0.5, w - 1, h - 1);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = VOLT.acid;
+  ctx.fillText(label, cx, cy + bob);
+  ctx.restore();
 }
 
 function drawCrate(ctx, c, timeMs) {

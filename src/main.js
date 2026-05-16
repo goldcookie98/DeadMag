@@ -8,8 +8,16 @@ import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { WALLS, MAP_W, MAP_H } from "./map.js";
 import { mountVersion } from "./version-display.js";
 import { mountCheats, applyCheat } from "./cheats.js";
+import * as audio from "./audio.js";
 
 const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
+
+const ZOMBIE_KIND_LABEL = {
+  sprinter: "SPRINTER",
+  brute: "BRUTE",
+  "volt-fuse": "VOLT-FUSE",
+  normal: "ZOMBIE",
+};
 
 // MP tuning. The server ticks at 30Hz (33ms), so spamming inputs every browser
 // frame (60-144Hz) just wastes uplink; cap to the server's tick rate. The local
@@ -92,6 +100,16 @@ function resize() {
   camera.setViewport(window.innerWidth, window.innerHeight);
 }
 window.addEventListener("resize", resize);
+
+// WebAudio needs a user gesture to start. Hook the first pointer/key press to
+// resume the context — after that, sound events fire normally for the session.
+const _primeAudio = () => {
+  audio.primeAudio();
+  window.removeEventListener("pointerdown", _primeAudio);
+  window.removeEventListener("keydown", _primeAudio);
+};
+window.addEventListener("pointerdown", _primeAudio);
+window.addEventListener("keydown", _primeAudio);
 resize();
 mountVersion();
 mountCheats({
@@ -713,13 +731,34 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 function processEvents(sim) {
+  const me = sim.players.get(localId);
+  const spatial = (x, y) => {
+    if (!me || x == null || y == null) return 1;
+    const d = Math.hypot(me.x - x, me.y - y);
+    if (d < 220) return 1;
+    if (d > 1400) return 0;
+    return Math.max(0, 1 - (d - 220) / 1180);
+  };
   for (const e of sim.events) {
     if (e.type === "kill") {
       const k = sim.players.get(e.killerId);
-      const v = e.victimId === -1 ? "ZOMBIE" : sim.players.get(e.victimId)?.name;
+      const zKindLabel = ZOMBIE_KIND_LABEL[e.zombieKind] || "ZOMBIE";
+      const v = e.victimId === -1 ? zKindLabel : sim.players.get(e.victimId)?.name;
       const kc = k?.color || "var(--magenta)";
       const wn = WEAPONS[e.weapon]?.name ?? "?";
       ui.pushKillFeed(`<span class="pname" style="color:${kc}">${escapeHtml(k?.name ?? "—")}</span> ▸ <span class="wchip">${escapeHtml(wn)}</span> ${escapeHtml(v ?? "—")}`);
+    } else if (e.type === "shoot") {
+      audio.playShoot(e.weapon, spatial(e.x, e.y));
+    } else if (e.type === "explosion") {
+      audio.playExplosion(spatial(e.x, e.y));
+    } else if (e.type === "voltfuse-boom") {
+      audio.playVoltFuseBoom(spatial(e.x, e.y));
+    } else if (e.type === "voltspike-chain") {
+      audio.playVoltspike(spatial(e.x, e.y));
+    } else if (e.type === "sonic-ring") {
+      audio.playSonic(spatial(e.x, e.y));
+    } else if (e.type === "zombie-die") {
+      audio.playZombieDie(e.kind, spatial(e.x, e.y));
     } else if (e.type === "down") {
       const p = sim.players.get(e.id);
       ui.pushKillFeed(`⚠ <span class="pname" style="color:${p?.color || "var(--magenta)"}">${escapeHtml(p?.name ?? "—")}</span> DOWNED · HOLD F`, { warn: true });
