@@ -578,6 +578,16 @@ function frame(now) {
 
   if (state === "playing" && sim) {
     const snap = input.snapshot(camera);
+    const slot = input.consumeWeaponSlot();
+    if (slot >= 0 && slot < ARSENAL_ORDER.length) {
+      const wid = ARSENAL_ORDER[slot];
+      const me = sim.players.get(localId);
+      const owned = wid === "pistol" || !!me?.inventory?.[wid];
+      if (me && me.state === "alive" && owned && me.weapon !== wid) {
+        if (mp) mp.sendEquip(wid);
+        else switchWeapon(sim, localId, wid);
+      }
+    }
     const online = !!mp;
     if (online) advanceRenderClock(dtMs);
     if (!online) {

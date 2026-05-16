@@ -8,6 +8,15 @@ const KEYS = {
   escape: new Set(["Escape"]),
 };
 
+function digitSlot(code) {
+  if (code.startsWith("Digit")) return parseInt(code.slice(5), 10) - 1;
+  if (code.startsWith("Numpad") && code.length === 7) {
+    const n = parseInt(code.slice(6), 10);
+    if (!Number.isNaN(n) && n >= 0 && n <= 9) return n - 1;
+  }
+  return -1;
+}
+
 export class Input {
   constructor(canvas) {
     this.keys = new Set();
@@ -15,6 +24,7 @@ export class Input {
     this.reloadPressed = false;
     this.escapePressed = false;
     this.autoFire = false;
+    this.weaponSlot = -1;
     this._enabled = true;
 
     window.addEventListener("keydown", (e) => {
@@ -24,6 +34,10 @@ export class Input {
       if (KEYS.reload.has(e.code)) this.reloadPressed = true;
       if (KEYS.escape.has(e.code)) this.escapePressed = true;
       if (!wasDown && e.code === "KeyE") this.autoFire = !this.autoFire;
+      if (!wasDown) {
+        const slot = digitSlot(e.code);
+        if (slot >= 0) this.weaponSlot = slot;
+      }
       if (e.code === "Space") e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.keys.delete(e.code));
@@ -55,6 +69,7 @@ export class Input {
   consumeReload() { const v = this.reloadPressed; this.reloadPressed = false; return v; }
   consumeEscape() { const v = this.escapePressed; this.escapePressed = false; return v; }
   consumeClick() { const v = this.mouse.clicked; this.mouse.clicked = false; return v; }
+  consumeWeaponSlot() { const v = this.weaponSlot; this.weaponSlot = -1; return v; }
 
   snapshot(camera) {
     let mx = 0, my = 0;
