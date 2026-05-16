@@ -757,8 +757,6 @@ function processEvents(sim) {
       audio.playVoltspike(spatial(e.x, e.y));
     } else if (e.type === "sonic-ring") {
       audio.playSonic(spatial(e.x, e.y));
-    } else if (e.type === "zombie-die") {
-      audio.playZombieDie(e.kind, spatial(e.x, e.y));
     } else if (e.type === "down") {
       const p = sim.players.get(e.id);
       ui.pushKillFeed(`⚠ <span class="pname" style="color:${p?.color || "var(--magenta)"}">${escapeHtml(p?.name ?? "—")}</span> DOWNED · HOLD F`, { warn: true });

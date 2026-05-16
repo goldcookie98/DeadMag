@@ -580,7 +580,6 @@ export function shopRevive(sim, playerId) {
 
 function onZombieDeath(sim, z, killer, opts = {}) {
   sim.zombies = sim.zombies.filter((zz) => zz !== z);
-  sim.events.push({ type: "zombie-die", kind: z.kind, x: z.x, y: z.y });
   if (killer) {
     let reward = 20;
     if (z.kind === "sprinter") reward = 40;
