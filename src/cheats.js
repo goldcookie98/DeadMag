@@ -60,6 +60,13 @@ export function applyCheat(code, { sim, localId }) {
       me.invincible = !me.invincible;
       return { ok: true, message: me.invincible ? "invincibility ON." : "invincibility OFF." };
 
+    case "one shot":
+    case "oneshot":
+    case "1shot":
+    case "instakill":
+      me.oneShot = !me.oneShot;
+      return { ok: true, message: me.oneShot ? "one-shot kills ON." : "one-shot kills OFF." };
+
     case "all normal":
     case "normal horde":
       sim.forceZombieKind = null;

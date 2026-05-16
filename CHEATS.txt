@@ -14,6 +14,13 @@ god              — Toggle invincibility (you take no damage).
 invincible       — Alias for "god".
 invincibility    — Alias for "god".
 
+one shot         — Toggle one-shot kills (your bullets, rockets, and
+                   melee instantly destroy any zombie, including
+                   armored brutes).
+oneshot          — Alias.
+1shot            — Alias.
+instakill        — Alias.
+
 all normal       — Stop forcing a zombie type; spawns return to the
                    normal wave-based mix.
 normal horde     — Alias for "all normal".

@@ -124,11 +124,11 @@ function pickZombieKind(sim) {
   if (sim.forceZombieKind) return sim.forceZombieKind;
   const wave = sim.wave;
   if (wave < 3) return "normal";
-  const specialRate = Math.min(0.30, 0.08 + (wave - 3) * 0.03);
+  const specialRate = Math.min(0.40, 0.20 + (wave - 3) * 0.025);
   if (Math.random() >= specialRate) return "normal";
   const pool = ["sprinter"];
-  if (wave >= 6) pool.push("brute");
-  if (wave >= 8) pool.push("volt-fuse");
+  if (wave >= 5) pool.push("brute");
+  if (wave >= 7) pool.push("volt-fuse");
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -484,6 +484,7 @@ function onZombieDeath(sim, z, killer, opts = {}) {
 // Routes raw damage through kind-specific gates (brute plates, volt-fuse
 // fuse-immunity). Returns true if the zombie was killed by this call.
 function damageZombie(sim, z, dmg, attacker, opts = {}) {
+  if (attacker?.oneShot) dmg *= 1000;
   if (z.kind === "volt-fuse") {
     if (opts.fuseTipHit) {
       detonateVoltFuse(sim, z, attacker, { fuseTipKill: true });
