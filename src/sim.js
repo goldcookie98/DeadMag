@@ -18,8 +18,8 @@ const REVIVE_TIME_MS = 5000;
 const REVIVE_RANGE = PLAYER_R * 5.5;
 
 // Special-zombie tuning
-const VOLT_FUSE_LIFE_MS = 6000;
-const VOLT_FUSE_PROX_DETONATE = 90;
+const VOLT_FUSE_LIFE_MS = 11000;
+const VOLT_FUSE_PROX_DETONATE = 36;
 const VOLT_FUSE_SPLASH_R = 120;
 const VOLT_FUSE_DMG = 80;
 const VOLT_FUSE_SIGHT_R = 520;
@@ -587,12 +587,10 @@ function damageZombie(sim, z, dmg, attacker, opts = {}) {
       detonateVoltFuse(sim, z, attacker, { fuseTipKill: true });
       return true;
     }
-    if (opts.explosion) {
-      z.hp -= dmg;
-      if (z.hp <= 0) {
-        detonateVoltFuse(sim, z, attacker, { fuseTipKill: false });
-        return true;
-      }
+    z.hp -= dmg;
+    if (z.hp <= 0) {
+      detonateVoltFuse(sim, z, attacker, { fuseTipKill: false });
+      return true;
     }
     return false;
   }
