@@ -165,6 +165,55 @@ html, body {
 .menu-buttons { display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin-top: 24px; }
 .menu-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
+.menu-name-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--dim2);
+  background: rgba(28,11,54,0.4);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 100%, 10px 100%);
+}
+.menu-name-label {
+  font-family: var(--display);
+  font-size: 16px;
+  letter-spacing: 0.2em;
+  color: var(--cyan);
+}
+.menu-name-input {
+  font-family: var(--display);
+  background: transparent;
+  color: var(--fg);
+  border: none;
+  outline: none;
+  padding: 4px 0;
+  font-size: 22px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  width: 100%;
+}
+.menu-name-input::placeholder { color: var(--dim); letter-spacing: 0.15em; }
+.menu-name-input:focus { color: var(--cyan); text-shadow: 0 0 12px rgba(46,255,229,0.45); }
+.menu-name-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--magenta);
+  white-space: nowrap;
+}
+.menu-name-hint.ok { color: var(--acid); }
+.vbtn[disabled], .vbtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  box-shadow: none;
+  background: transparent;
+}
+.vbtn[disabled]:hover, .vbtn:disabled:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
 /* Voltage buttons */
 .vbtn {
   position: relative;
@@ -857,6 +906,18 @@ html, body {
 .go-weapon-art svg { width: 100%; height: 100%; }
 .go-weapon-foot { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-family: var(--mono); font-size: 9px; color: var(--dim); letter-spacing: 0.2em; }
 .go-weapon-foot .go-weapon-count { font-family: var(--display); font-size: 22px; color: var(--fg); letter-spacing: 0.02em; }
+
+.go-zombies { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+.go-zombie {
+  background: rgba(21,7,40,0.53);
+  border: 2px solid var(--magenta);
+  padding: 10px 12px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+  display: flex; flex-direction: column; align-items: stretch;
+}
+.go-zombie.unused { border-color: var(--dim2); color: var(--dim) !important; opacity: 0.4; }
+.go-zombie-count { font-family: var(--display); font-size: 28px; letter-spacing: 0.03em; line-height: 1; }
+.go-zombie-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em; color: var(--dim); margin-top: 4px; }
 
 /* shop-card grids/cards use clip-path corner cut */
 .shop-card, .shop-upgrade, .shop-supply {

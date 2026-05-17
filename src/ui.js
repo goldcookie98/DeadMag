@@ -146,6 +146,10 @@ export class UI {
       connectingStatus: document.getElementById("connecting-status"),
       connectingSub: document.getElementById("connecting-sub"),
       connectingCancel: document.getElementById("connecting-cancel"),
+      nameInput: document.getElementById("menu-name"),
+      nameHint: document.getElementById("menu-name-hint"),
+      mpJoinBtn: document.querySelector('#menu [data-action="mp-join"]'),
+      mpCreateBtn: document.querySelector('#menu [data-action="mp-create"]'),
     };
     this.handlers = {};
     this._wire();
@@ -155,8 +159,16 @@ export class UI {
 
   _wire() {
     document.querySelectorAll("#menu .menu-buttons button").forEach((b) => {
-      b.addEventListener("click", () => this.handlers.action?.(b.dataset.action));
+      b.addEventListener("click", () => {
+        if (b.disabled) return;
+        this.handlers.action?.(b.dataset.action);
+      });
     });
+    if (this.el.nameInput) {
+      this.el.nameInput.addEventListener("input", () => {
+        this.handlers.nameChanged?.(this.el.nameInput.value);
+      });
+    }
     document.querySelectorAll("#lobby [data-mode]").forEach((b) => {
       b.addEventListener("click", () => this.handlers.setMode?.(b.dataset.mode));
     });
@@ -223,8 +235,8 @@ export class UI {
     this.el.lobbyStart.classList.toggle("disabled", !canStart);
   }
 
-  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs, hp, maxHp, armor, score, aliveMs, zombiesLeft, slots, activeSlot, slotAmmo, slotPacked, crate, squad, ping }) {
-    this._setStatusOverlay(playerState, bleedLeftMs, reviveProgressMs);
+  setHUD({ mode, wave, cash, weapon, ammo, mag, reloading, reloadProgress, lives, arsenalProgress, autoFire, playerState, bleedLeftMs, reviveProgressMs, respawnLeftMs, hasTeammates, hp, maxHp, armor, score, aliveMs, zombiesLeft, slots, activeSlot, slotAmmo, slotPacked, crate, squad, ping }) {
+    this._setStatusOverlay(playerState, bleedLeftMs, reviveProgressMs, { mode, respawnLeftMs, hasTeammates });
 
     this.el.mode.textContent = mode ? mode.toUpperCase() : "—";
 
@@ -357,14 +369,42 @@ export class UI {
 
   setNetStatus(text) { this.el.netStatus.textContent = text; }
 
-  _setStatusOverlay(state, bleedLeftMs, reviveProgressMs) {
+  setName(name) {
+    if (this.el.nameInput && this.el.nameInput.value !== name) {
+      this.el.nameInput.value = name;
+    }
+  }
+
+  setOnlineEnabled(enabled) {
+    for (const b of [this.el.mpJoinBtn, this.el.mpCreateBtn]) {
+      if (!b) continue;
+      b.disabled = !enabled;
+      b.classList.toggle("disabled", !enabled);
+    }
+    if (this.el.nameHint) {
+      this.el.nameHint.textContent = enabled ? "READY" : "REQUIRED FOR ONLINE";
+      this.el.nameHint.classList.toggle("ok", !!enabled);
+    }
+  }
+
+  hideHudStatus() {
+    const el = document.getElementById("hud-status");
+    if (el) el.style.display = "none";
+  }
+
+  _setStatusOverlay(state, bleedLeftMs, reviveProgressMs, opts = {}) {
     let el = document.getElementById("hud-status");
     if (!el) {
       el = document.createElement("div");
       el.id = "hud-status";
       document.body.appendChild(el);
     }
+    const mode = opts.mode;
+    const hasTeammates = !!opts.hasTeammates;
     if (state === "down") {
+      // Down only happens in horde co-op (solo horde skips this state). If
+      // we somehow get here without teammates, treat as terminal.
+      if (!hasTeammates) { el.style.display = "none"; return; }
       const secs = Math.max(0, Math.ceil((bleedLeftMs ?? 0) / 1000));
       const rev = Math.max(0, Math.min(100, ((reviveProgressMs ?? 0) / 5000) * 100));
       el.innerHTML = `<div class="status-title">DOWNED</div>
@@ -372,9 +412,20 @@ export class UI {
         <div class="status-bar"><div style="width:${rev}%"></div></div>`;
       el.style.display = "block";
     } else if (state === "dead") {
-      el.innerHTML = `<div class="status-title">DEAD</div>
-        <div class="status-sub">WAIT FOR TEAMMATE TO BUY REVIVE FROM SHOP</div>`;
-      el.style.display = "block";
+      if (mode === "arsenal") {
+        // Arsenal respawns automatically — show a countdown, not a revive plea.
+        const secs = Math.max(0, Math.ceil((opts.respawnLeftMs ?? 0) / 1000));
+        el.innerHTML = `<div class="status-title">ELIMINATED</div>
+          <div class="status-sub">RESPAWN IN ${secs}s</div>`;
+        el.style.display = "block";
+      } else if (mode === "horde" && hasTeammates) {
+        el.innerHTML = `<div class="status-title">DEAD</div>
+          <div class="status-sub">WAIT FOR TEAMMATE TO BUY REVIVE FROM SHOP</div>`;
+        el.style.display = "block";
+      } else {
+        // Solo (or last-standing) — game over takes over this frame, nothing to show.
+        el.style.display = "none";
+      }
     } else {
       el.style.display = "none";
     }
@@ -523,7 +574,7 @@ export class UI {
     while (host.childElementCount > 4) host.lastChild.remove();
   }
 
-  showGameOver({ title, win, stats, statTiles, weaponKills }) {
+  showGameOver({ title, win, stats, statTiles, weaponKills, zombieKills }) {
     const dot = title.endsWith(".") ? "" : ".";
     this.el.goTitle.innerHTML = `${escape(title.replace(/\.$/, ""))}<span class="go-dot">${dot || "."}</span>`;
     this.el.goTitle.classList.toggle("win", !!win);
@@ -550,6 +601,23 @@ export class UI {
         return `<div class="go-weapon ${used ? "" : "unused"}">
   <div class="go-weapon-art">${WEAPON_SVG[k.id] || ""}</div>
   <div class="go-weapon-foot"><span>${escape(WEAPONS[k.id]?.name || k.id.toUpperCase())}</span><span class="go-weapon-count">${k.count}</span></div>
+</div>`;
+      }).join("") + `</div>`;
+    }
+    if (Array.isArray(zombieKills) && zombieKills.length) {
+      const zombieColors = {
+        normal: "var(--magenta)",
+        sprinter: "var(--cyan)",
+        brute: "var(--yellow)",
+        "volt-fuse": "var(--acid)",
+      };
+      html += `<div class="shop-section-head" style="margin-top:18px;color:var(--cyan)">// HOSTILES NEUTRALIZED</div>
+<div class="go-zombies">` + zombieKills.map((z) => {
+        const used = z.count > 0;
+        const color = zombieColors[z.kind] || "var(--magenta)";
+        return `<div class="go-zombie ${used ? "" : "unused"}" style="border-color:${color};color:${color}">
+  <div class="go-zombie-count">${z.count}</div>
+  <div class="go-zombie-label">${escape(z.label)}</div>
 </div>`;
       }).join("") + `</div>`;
     }

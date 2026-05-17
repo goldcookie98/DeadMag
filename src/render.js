@@ -1,5 +1,5 @@
 import { WALLS, MAP_W, MAP_H, CRATE, PAP, BARRICADE } from "./map.js";
-import { CONSTANTS } from "./sim.js";
+import { CONSTANTS, CRATE_PENDING_EXPIRE_MS } from "./sim.js";
 import { WEAPONS } from "./weapons.js";
 import { WEAPON_SVG } from "./ui.js";
 
@@ -361,7 +361,7 @@ function drawProps(ctx, sim, localId) {
   // Floating "TAKE [WEAPON]" reward above the crate for any player with a
   // pending pickup.
   for (const [, p] of sim.players) {
-    if (p.crateResultPending && p.id === localId) drawCratePending(ctx, p.crateResultPending, sim.timeMs, crateRect);
+    if (p.crateResultPending && p.id === localId) drawCratePending(ctx, p, sim.timeMs, crateRect);
   }
 
   // BOOM countdown — visible to all players while the crate is fused.
@@ -501,10 +501,17 @@ function drawCrateSpin(ctx, p, simTimeMs, crateRect = CRATE) {
   ctx.restore();
 }
 
-function drawCratePending(ctx, weaponId, timeMs, crateRect = CRATE) {
+function drawCratePending(ctx, p, timeMs, crateRect = CRATE) {
+  const weaponId = p.crateResultPending;
   const cx = crateRect.x + crateRect.w / 2;
   const cy = crateRect.y - 32;
   const bob = Math.sin(timeMs * 0.005) * 3;
+  // Remaining fraction of the 10s pickup window (1 → full, 0 → about to drop).
+  const since = p.crateResultPendingSince || timeMs;
+  const remainMs = Math.max(0, CRATE_PENDING_EXPIRE_MS - (timeMs - since));
+  const frac = Math.max(0, Math.min(1, remainMs / CRATE_PENDING_EXPIRE_MS));
+  // Color shifts from acid → yellow → magenta as the timer drains.
+  const barColor = frac > 0.5 ? VOLT.acid : frac > 0.25 ? VOLT.yellow : VOLT.magenta;
   ctx.save();
   ctx.font = "bold 11px JetBrains Mono, monospace";
   ctx.textAlign = "center";
@@ -514,14 +521,25 @@ function drawCratePending(ctx, weaponId, timeMs, crateRect = CRATE) {
   const h = 22;
   ctx.fillStyle = "rgba(8,2,15,0.9)";
   ctx.fillRect(cx - w / 2, cy - h / 2 + bob, w, h);
-  ctx.strokeStyle = VOLT.acid;
+  ctx.strokeStyle = barColor;
   ctx.lineWidth = 1.4;
-  ctx.shadowColor = VOLT.acid;
+  ctx.shadowColor = barColor;
   ctx.shadowBlur = 10;
   ctx.strokeRect(cx - w / 2 + 0.5, cy - h / 2 + bob + 0.5, w - 1, h - 1);
   ctx.shadowBlur = 0;
-  ctx.fillStyle = VOLT.acid;
+  ctx.fillStyle = barColor;
   ctx.fillText(label, cx, cy + bob);
+  // Progress bar directly under the label box, draining left-to-right.
+  const barW = w - 4;
+  const barH = 3;
+  const barX = cx - barW / 2;
+  const barY = cy + h / 2 + bob + 3;
+  ctx.fillStyle = "rgba(8,2,15,0.9)";
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = barColor;
+  ctx.shadowColor = barColor;
+  ctx.shadowBlur = 6;
+  ctx.fillRect(barX, barY, barW * frac, barH);
   ctx.restore();
 }
 

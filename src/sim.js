@@ -47,6 +47,7 @@ const CRATE_BLOWUP_CHANCE = 0.10;
 const CRATE_VOLT_CHANCE = 0.05;
 const CRATE_RIPPLE_CHANCE = 0.05;
 const CRATE_NORMAL_POOL = ["shotgun", "smg", "sniper", "rocket", "knife"];
+export const CRATE_PENDING_EXPIRE_MS = 10_000;
 
 let _id = 1;
 const nextId = () => _id++;
@@ -102,6 +103,7 @@ export function makePlayer(name, color, isBot = false) {
     crateResult: null,
     crateBlowUp: false,
     crateResultPending: null,
+    crateResultPendingSince: 0,
     cash: 0,
     lives: 3,
     alive: true,
@@ -114,6 +116,16 @@ export function makePlayer(name, color, isBot = false) {
     upgrades: { dmg: 0, rate: 0, reload: 0, speed: 0 },
     arsenalKills: new Set(),
     score: 0,
+    stats: {
+      damageDealt: 0,
+      shotsFired: 0,
+      shotsHit: 0,
+      zombieKillsByKind: { normal: 0, sprinter: 0, brute: 0, "volt-fuse": 0 },
+      moneyEarned: 0,
+      cratesOpened: 0,
+      killsByWeapon: {},
+      weaponsCollected: new Set(["pistol"]),
+    },
   };
 }
 
@@ -244,6 +256,20 @@ export function addPlayer(sim, name, color, isBot = false, forcedId = null) {
   return p;
 }
 
+function serializeStats(s) {
+  if (!s) return null;
+  return {
+    damageDealt: s.damageDealt,
+    shotsFired: s.shotsFired,
+    shotsHit: s.shotsHit,
+    zombieKillsByKind: { ...s.zombieKillsByKind },
+    moneyEarned: s.moneyEarned,
+    cratesOpened: s.cratesOpened,
+    killsByWeapon: { ...s.killsByWeapon },
+    weaponsCollected: [...s.weaponsCollected],
+  };
+}
+
 // Wire-format snapshot for transmission over DataChannels. Maps/Sets aren't
 // JSON-serializable, so we flatten to arrays here; the client re-inflates.
 // `_bot` is host-only AI state and is stripped (guests don't run AI).
@@ -264,12 +290,14 @@ export function serializeSim(sim) {
       lastShotAt: p.lastShotAt, chargingSince: p.chargingSince,
       crateOpenedAt: p.crateOpenedAt, crateResult: p.crateResult, crateBlowUp: p.crateBlowUp,
       crateResultPending: p.crateResultPending,
+      crateResultPendingSince: p.crateResultPendingSince,
       cash: p.cash, lives: p.lives, alive: p.alive, ready: p.ready,
       state: p.state, deathAt: p.deathAt, downedAt: p.downedAt,
       bleedOutAt: p.bleedOutAt, reviveProgress: p.reviveProgress,
       upgrades: p.upgrades,
       arsenalKills: [...p.arsenalKills],
       score: p.score,
+      stats: serializeStats(p.stats),
     });
   }
   return {
@@ -310,7 +338,8 @@ export function setInput(sim, id, input) {
 
 function moveSpeedFor(p) {
   const base = BASE_SPEED + p.upgrades.speed * 35;
-  return p.weapon === "knife" ? base * 1.5 : base;
+  const mul = p.speedMul || 1;
+  return (p.weapon === "knife" ? base * 1.5 : base) * mul;
 }
 function dmgMulFor(p)  { return 1 + p.upgrades.dmg  * 0.15; }
 function rateMulFor(p) { return 1 - p.upgrades.rate * 0.10; }
@@ -399,13 +428,15 @@ function tryShoot(sim, p, input) {
   const baseAngle = Math.atan2(dy, dx);
 
   if (w.kind === "melee") {
+    if (p.stats) p.stats.shotsFired += 1;
+    let landed = false;
     for (const z of [...sim.zombies]) {
       const ddx = z.x - p.x, ddy = z.y - p.y;
       const dist = Math.hypot(ddx, ddy);
       if (dist > w.range + (z.radius - ZOMBIE_R)) continue;
       const a = Math.atan2(ddy, ddx);
       const da = Math.abs(angleDiff(a, baseAngle));
-      if (da < 0.6) damageZombie(sim, z, w.dmg * dmgMulFor(p), p);
+      if (da < 0.6) { damageZombie(sim, z, w.dmg * dmgMulFor(p), p); landed = true; }
     }
     for (const [, other] of sim.players) {
       if (other.id === p.id || !other.alive) continue;
@@ -416,14 +447,19 @@ function tryShoot(sim, p, input) {
       const a = Math.atan2(ddy, ddx);
       if (Math.abs(angleDiff(a, baseAngle)) < 0.6) {
         damagePlayer(sim, other, w.dmg * dmgMulFor(p), p);
+        landed = true;
       }
     }
+    if (landed && p.stats) p.stats.shotsHit += 1;
     return;
   }
 
   const pellets = w.pellets || 1;
   const packed = !!p.slotPacked[p.activeSlot];
   const bursts = p.noDelay ? 10 : 1;
+  // Count each projectile (pellet × burst) as a shot for accuracy. Melee swings
+  // are counted separately in the melee branch above.
+  if (p.stats) p.stats.shotsFired += bursts * pellets;
   for (let b = 0; b < bursts; b++) {
     for (let i = 0; i < pellets; i++) {
       const angle = baseAngle + (Math.random() - 0.5) * w.spread * 2;
@@ -484,7 +520,16 @@ function damagePlayer(sim, target, amount, attacker) {
   if (target.hp > 0) return;
 
   if (sim.mode === "horde") {
-    if (target.state === "alive") onPlayerDown(sim, target);
+    const aliveOthers = [...sim.players.values()].some((o) => o.id !== target.id && o.state === "alive");
+    if (target.state === "alive") {
+      if (aliveOthers) onPlayerDown(sim, target);
+      else {
+        // Solo (or last-standing) horde: no teammate can revive — skip the
+        // down phase, burn remaining lives, and end the run immediately.
+        target.lives = 1;
+        onPlayerDead(sim, target, attacker);
+      }
+    }
     else if (target.state === "down") onPlayerDead(sim, target, attacker);
   } else {
     onPlayerDeath(sim, target, attacker);
@@ -523,6 +568,11 @@ function onPlayerDeath(sim, target, attacker) {
   if (attacker && sim.mode === "arsenal" && attacker.id !== target.id) {
     attacker.arsenalKills.add(attacker.weapon);
     attacker.score += 1;
+    if (attacker.stats) {
+      const kbw = attacker.stats.killsByWeapon;
+      const wid = attacker.weapon;
+      if (wid) kbw[wid] = (kbw[wid] || 0) + 1;
+    }
     const idx = ARSENAL_ORDER.indexOf(attacker.weapon);
     const next = ARSENAL_ORDER[(idx + 1) % ARSENAL_ORDER.length];
     attacker.weapon = next;
@@ -530,6 +580,7 @@ function onPlayerDeath(sim, target, attacker) {
     attacker.slotAmmo[attacker.activeSlot] = WEAPONS[next].mag;
     attacker.ammo = WEAPONS[next].mag;
     attacker.reloadingUntil = 0;
+    if (attacker.stats) attacker.stats.weaponsCollected.add(next);
     if (attacker.arsenalKills.size >= ARSENAL_ORDER.length) {
       sim.gameOver = true;
       sim.winnerId = attacker.id;
@@ -597,6 +648,14 @@ function onZombieDeath(sim, z, killer, opts = {}) {
     if (killer.doubleMoney) reward *= 2;
     killer.cash += reward;
     killer.score += 1;
+    if (killer.stats) {
+      killer.stats.moneyEarned += reward;
+      const kbk = killer.stats.zombieKillsByKind;
+      kbk[z.kind] = (kbk[z.kind] || 0) + 1;
+      const kbw = killer.stats.killsByWeapon;
+      const wid = killer.weapon;
+      if (wid) kbw[wid] = (kbw[wid] || 0) + 1;
+    }
     sim.events.push({ type: "kill", killerId: killer.id, victimId: -1, weapon: killer.weapon, zombieKind: z.kind });
   }
 }
@@ -605,6 +664,7 @@ function onZombieDeath(sim, z, killer, opts = {}) {
 // fuse-immunity). Returns true if the zombie was killed by this call.
 function damageZombie(sim, z, dmg, attacker, opts = {}) {
   if (attacker?.oneShot) dmg *= 1000;
+  if (attacker?.stats) attacker.stats.damageDealt += dmg;
   if (z.kind === "volt-fuse") {
     if (opts.fuseTipHit) {
       detonateVoltFuse(sim, z, attacker, { fuseTipKill: true });
@@ -627,7 +687,11 @@ function damageZombie(sim, z, dmg, attacker, opts = {}) {
       const plate = z.plates[aliveIdxs[0]];
       plate.alive = false;
       plate.hp = 0;
-      if (attacker) attacker.cash += attacker.doubleMoney ? 40 : 20;
+      if (attacker) {
+        const bonus = attacker.doubleMoney ? 40 : 20;
+        attacker.cash += bonus;
+        if (attacker.stats) attacker.stats.moneyEarned += bonus;
+      }
     } else if (aliveIdxs.length > 0) {
       z.hp -= dmg * (1 - BRUTE_PLATE_ABSORB);
       const pi = aliveIdxs[Math.floor(Math.random() * aliveIdxs.length)];
@@ -636,7 +700,11 @@ function damageZombie(sim, z, dmg, attacker, opts = {}) {
       if (plate.hp <= 0) {
         plate.alive = false;
         plate.hp = 0;
-        if (attacker) attacker.cash += attacker.doubleMoney ? 40 : 20;
+        if (attacker) {
+          const bonus = attacker.doubleMoney ? 40 : 20;
+          attacker.cash += bonus;
+          if (attacker.stats) attacker.stats.moneyEarned += bonus;
+        }
       }
     } else {
       z.hp -= dmg;
@@ -845,6 +913,7 @@ function updateBullets(sim, dt) {
 
     if (hit) {
       const owner = sim.players.get(b.ownerId);
+      if (owner?.stats) owner.stats.shotsHit += 1;
       if (b.weapon === "rocket") {
         rocketExplode(sim, nx, ny, b);
       } else if (b.weapon === "voltspike" && hit.zombie) {
@@ -1117,7 +1186,12 @@ function updateHorde(sim) {
     sim.waveActive = false;
     sim.shopOpen = true;
     sim.shopOpenUntil = sim.timeMs + SHOP_DURATION_MS;
-    for (const [, p] of sim.players) { p.cash += 50 + sim.wave * 10; p.ready = false; }
+    for (const [, p] of sim.players) {
+      const bonus = 50 + sim.wave * 10;
+      p.cash += bonus;
+      if (p.stats) p.stats.moneyEarned += bonus;
+      p.ready = false;
+    }
     sim.events.push({ type: "wave-end", wave: sim.wave });
   }
 
@@ -1317,7 +1391,9 @@ function acceptCrateResult(sim, p) {
   if (!p.crateResultPending) return;
   const wid = p.crateResultPending;
   grantWeaponToActiveOrEmpty(sim, p, wid);
+  if (p.stats) p.stats.weaponsCollected.add(wid);
   p.crateResultPending = null;
+  p.crateResultPendingSince = 0;
   sim.events.push({ type: "crate-take", playerId: p.id, weapon: wid });
 }
 
@@ -1327,6 +1403,7 @@ function openCrate(sim, p) {
   if (sim.crateBoom) return; // Crate is mid-detonation.
   if (p.cash < CRATE_COST) return;
   p.cash -= CRATE_COST;
+  if (p.stats) p.stats.cratesOpened += 1;
   const roll = Math.random();
   let result = null;
   let blowUp = false;
@@ -1417,11 +1494,22 @@ function updateCrateAnims(sim) {
       });
     } else if (p.crateResult) {
       p.crateResultPending = p.crateResult;
+      p.crateResultPendingSince = sim.timeMs;
       sim.events.push({ type: "crate-ready", playerId: p.id, weapon: p.crateResult });
     }
     p.crateOpenedAt = 0;
     p.crateResult = null;
     p.crateBlowUp = false;
+  }
+  // Expire pending pickups: if the player doesn't claim the gun within
+  // CRATE_PENDING_EXPIRE_MS of it floating up, they lose it.
+  for (const [, p] of sim.players) {
+    if (!p.crateResultPending) continue;
+    if (sim.timeMs - p.crateResultPendingSince < CRATE_PENDING_EXPIRE_MS) continue;
+    const wid = p.crateResultPending;
+    p.crateResultPending = null;
+    p.crateResultPendingSince = 0;
+    sim.events.push({ type: "crate-expire", playerId: p.id, weapon: wid });
   }
 }
 

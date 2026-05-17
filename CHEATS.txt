@@ -10,7 +10,8 @@ CODES
 money            — Set your cash to $999,999.
 max money        — Alias for "money".
 
-god              — Toggle invincibility (you take no damage).
+god              — Toggle full god mode: invincible, 10× fire rate,
+                   3× move speed, no reload, bottomless mag.
 invincible       — Alias for "god".
 invincibility    — Alias for "god".
 

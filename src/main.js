@@ -56,7 +56,25 @@ let mp = null;
 let roomCode = null;
 let isHost = false;
 let lobby = { players: [], mode: "horde" };
-let myName = "P_" + Math.floor(Math.random() * 899 + 100);
+const NAME_KEY = "deadmag.name";
+let myName = loadSavedName();
+
+function loadSavedName() {
+  try {
+    const n = (localStorage.getItem(NAME_KEY) || "").trim().slice(0, 16);
+    return n;
+  } catch { return ""; }
+}
+function saveName(n) {
+  try {
+    if (n) localStorage.setItem(NAME_KEY, n);
+    else localStorage.removeItem(NAME_KEY);
+  } catch {}
+}
+function sanitizeName(raw) {
+  return String(raw || "").replace(/\s+/g, " ").trim().slice(0, 16);
+}
+function hasName() { return sanitizeName(myName).length > 0; }
 
 // Snapshot interpolation. The timeline is the server's authoritative timeMs
 // (not the client's wall clock) — that way TCP bursts and dyno hiccups don't
@@ -119,6 +137,13 @@ mountCheats({
 ui.showOnly("menu");
 ui.setNetStatus("");
 
+ui.setName(myName);
+ui.setOnlineEnabled(hasName());
+ui.on("nameChanged", (raw) => {
+  myName = sanitizeName(raw);
+  saveName(myName);
+  ui.setOnlineEnabled(hasName());
+});
 ui.on("action", onMenuAction);
 ui.on("setMode", (m) => {
   if (mp && !mp.isHost) return;
@@ -151,9 +176,15 @@ ui.on("equip", (wid) => {
 function onMenuAction(action) {
   if (action === "solo-horde") startSolo("horde");
   else if (action === "solo-arsenal") startSolo("arsenal");
-  else if (action === "mp-create") createLobby();
-  else if (action === "mp-join") openJoin();
+  else if (action === "mp-create") { if (requireName()) createLobby(); }
+  else if (action === "mp-join")   { if (requireName()) openJoin(); }
   else if (action === "set-server") promptServerUrl();
+}
+
+function requireName() {
+  if (hasName()) return true;
+  ui.el.nameInput?.focus();
+  return false;
 }
 
 function refreshServerLabel() {
@@ -229,6 +260,7 @@ function openJoin() {
 }
 
 async function joinSubmit(code) {
+  if (!hasName()) { alert("Enter a callsign on the main menu before joining."); leaveToMenu(); return; }
   code = (code || "").toUpperCase();
   if (!/^[A-Z0-9]{4}$/.test(code)) { alert("Code must be 4 chars."); return; }
   ui.showOnly("lobby");
@@ -326,7 +358,11 @@ function hostStartGame() {
 function inflateState(s) {
   return {
     ...s,
-    players: new Map(s.players.map((p) => [p.id, { ...p, arsenalKills: new Set(p.arsenalKills || []) }])),
+    players: new Map(s.players.map((p) => [p.id, {
+      ...p,
+      arsenalKills: new Set(p.arsenalKills || []),
+      stats: p.stats ? { ...p.stats, weaponsCollected: new Set(p.stats.weaponsCollected || []) } : null,
+    }])),
     inputs: new Map(),
   };
 }
@@ -424,6 +460,7 @@ function leaveToMenu() {
   _prevWeapon = null;
   _lastSeenWeapon = null;
   state = "menu";
+  ui.hideHudStatus();
   ui.showOnly("menu");
   ui.setNetStatus("");
 }
@@ -696,14 +733,34 @@ function frame(now) {
       let title, stats, statTiles, win = false;
       const aliveMs = sim.timeMs ?? 0;
       const aliveStr = fmtTime(aliveMs);
+      const st = me?.stats || null;
+      const accStr = st && st.shotsFired > 0
+        ? `${((st.shotsHit / st.shotsFired) * 100).toFixed(1)}%`
+        : "—";
+      const dmgStr = st ? Math.round(st.damageDealt).toLocaleString() : "0";
+      const moneyEarnedStr = `$${(st?.moneyEarned ?? 0).toLocaleString()}`;
+      const crates = st?.cratesOpened ?? 0;
+      const gunsCollected = st?.weaponsCollected?.size ?? 0;
+      let zombieKills = null;
       if (sim.mode === "horde") {
         title = "DEAD";
         stats = [`SQUAD WIPED`, `WAVE ${pad2(sim.wave)}`, `${aliveStr} ALIVE`];
         statTiles = [
-          { label: "WAVES",   value: pad2(sim.wave),                color: "magenta" },
-          { label: "KILLS",   value: String(me?.score ?? 0),        color: "acid", hi: true },
-          { label: "CASH",    value: `$${(me?.cash ?? 0).toLocaleString()}`, color: "yellow" },
-          { label: "TIME",    value: aliveStr,                       color: "dim" },
+          { label: "WAVES",      value: pad2(sim.wave),         color: "magenta" },
+          { label: "TIME",       value: aliveStr,               color: "dim" },
+          { label: "KILLS",      value: String(me?.score ?? 0), color: "acid", hi: true },
+          { label: "ACCURACY",   value: accStr,                 color: "cyan" },
+          { label: "DAMAGE",     value: dmgStr,                 color: "magenta" },
+          { label: "$ EARNED",   value: moneyEarnedStr,         color: "yellow" },
+          { label: "CRATES",     value: String(crates),         color: "yellow" },
+          { label: "GUNS",       value: String(gunsCollected),  color: "cyan" },
+        ];
+        const kbk = st?.zombieKillsByKind || {};
+        zombieKills = [
+          { kind: "normal",     label: "ZOMBIE",     count: kbk.normal     ?? 0 },
+          { kind: "sprinter",   label: "SPRINTER",   count: kbk.sprinter   ?? 0 },
+          { kind: "brute",      label: "BRUTE",      count: kbk.brute      ?? 0 },
+          { kind: "volt-fuse",  label: "VOLT-FUSE",  count: kbk["volt-fuse"] ?? 0 },
         ];
       } else {
         win = sim.winnerId === localId;
@@ -711,13 +768,17 @@ function frame(now) {
         const w = sim.players.get(sim.winnerId);
         stats = [`WINNER: ${w?.name ?? "—"}`, `${aliveStr} ALIVE`];
         statTiles = [
-          { label: "KILLS", value: String(me?.score ?? 0), color: "acid", hi: true },
+          { label: "KILLS",          value: String(me?.score ?? 0),            color: "acid", hi: true },
           { label: "WEAPONS CYCLED", value: String(me?.arsenalKills?.size ?? 0), color: "cyan" },
-          { label: "TIME", value: aliveStr, color: "dim" },
+          { label: "ACCURACY",       value: accStr,                            color: "cyan" },
+          { label: "DAMAGE",         value: dmgStr,                            color: "magenta" },
+          { label: "TIME",           value: aliveStr,                          color: "dim" },
         ];
       }
-      const weaponKills = ARSENAL_ORDER.map((id) => ({ id, count: me?.killsByWeapon?.[id] ?? 0 }));
-      ui.showGameOver({ title, win, stats, statTiles, weaponKills });
+      const kbw = st?.killsByWeapon || me?.killsByWeapon || {};
+      const weaponKills = ARSENAL_ORDER.map((id) => ({ id, count: kbw[id] ?? 0 }));
+      ui.hideHudStatus();
+      ui.showGameOver({ title, win, stats, statTiles, weaponKills, zombieKills });
       ui.showOnly("gameover");
     }
 
@@ -772,6 +833,11 @@ function processEvents(sim) {
       const p = sim.players.get(e.playerId);
       ui.pushKillFeed(`<span class="pname" style="color:${p?.color || "var(--cyan)"}">${escapeHtml(p?.name ?? "—")}</span> bought ${escapeHtml(e.itemName)} · -$${e.cost}`);
       ui.flashShopBuy?.(p?.name ?? "—", e.itemName);
+    } else if (e.type === "crate-expire") {
+      if (e.playerId === localId) {
+        const wn = WEAPONS[e.weapon]?.name ?? "WEAPON";
+        ui.pushKillFeed(`<span class="wchip">${escapeHtml(wn)}</span> LOST · CRATE TIMER EXPIRED`, { warn: true });
+      }
     } else if (e.type === "wave-start") {
       ui.pushKillFeed(`<span class="wchip">WAVE ${e.wave}</span> INCOMING`);
     } else if (e.type === "wave-end") {
@@ -814,6 +880,10 @@ function updateHUD() {
     playerState: me.state,
     bleedLeftMs: me.state === "down" ? Math.max(0, me.bleedOutAt - sim.timeMs) : 0,
     reviveProgressMs: me.reviveProgress || 0,
+    respawnLeftMs: me.state === "dead" && sim.mode === "arsenal" && me.lives > 0
+      ? Math.max(0, 2200 - (sim.timeMs - me.deathAt))
+      : 0,
+    hasTeammates: [...sim.players.values()].some((o) => o.id !== localId && !o.isBot),
     hp: me.hp,
     maxHp: me.maxHp,
     armor: me.armor,
