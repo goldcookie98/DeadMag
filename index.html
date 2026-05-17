@@ -93,11 +93,6 @@
             <button class="vbtn vbtn-primary vbtn-big" data-action="solo-horde">
               <span class="vbtn-label">SOLO HORDE</span><span class="vbtn-sub">CO-OP ZOMBIES</span><span class="vbtn-arrow">▶</span>
             </button>
-            <div class="menu-name-row">
-              <label class="menu-name-label" for="menu-name">CALLSIGN</label>
-              <input id="menu-name" class="menu-name-input" maxlength="16" placeholder="ENTER NAME TO PLAY ONLINE" autocomplete="off" spellcheck="false" />
-              <span id="menu-name-hint" class="menu-name-hint">REQUIRED FOR ONLINE</span>
-            </div>
             <div class="menu-btn-row">
               <button class="vbtn vbtn-cyan" data-action="solo-arsenal">
                 <span class="vbtn-label">ARSENAL</span><span class="vbtn-sub">FFA vs BOTS</span><span class="vbtn-arrow">▶</span>
@@ -238,6 +233,18 @@
             <button id="lobby-start" class="vbig vbig-magenta vbig-filled">◢ START ◣</button>
             <button id="lobby-leave" class="vbig vbig-dim">LEAVE</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="name-prompt" class="overlay hidden">
+      <div class="vpanel vpanel-cyan name-panel">
+        <div class="panel-tag panel-tag-cyan">// CALLSIGN</div>
+        <input id="name-prompt-input" maxlength="16" placeholder="ENTER NAME" autocomplete="off" spellcheck="false" />
+        <div class="panel-foot name-hint">Required for online play.</div>
+        <div class="join-actions">
+          <button id="name-prompt-go" class="vbig vbig-cyan vbig-filled">◢ CONFIRM ◣</button>
+          <button id="name-prompt-back" class="vbig vbig-dim">CANCEL</button>
         </div>
       </div>
     </div>

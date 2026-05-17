@@ -146,10 +146,10 @@ export class UI {
       connectingStatus: document.getElementById("connecting-status"),
       connectingSub: document.getElementById("connecting-sub"),
       connectingCancel: document.getElementById("connecting-cancel"),
-      nameInput: document.getElementById("menu-name"),
-      nameHint: document.getElementById("menu-name-hint"),
-      mpJoinBtn: document.querySelector('#menu [data-action="mp-join"]'),
-      mpCreateBtn: document.querySelector('#menu [data-action="mp-create"]'),
+      namePrompt: document.getElementById("name-prompt"),
+      namePromptInput: document.getElementById("name-prompt-input"),
+      namePromptGo: document.getElementById("name-prompt-go"),
+      namePromptBack: document.getElementById("name-prompt-back"),
     };
     this.handlers = {};
     this._wire();
@@ -164,11 +164,17 @@ export class UI {
         this.handlers.action?.(b.dataset.action);
       });
     });
-    if (this.el.nameInput) {
-      this.el.nameInput.addEventListener("input", () => {
-        this.handlers.nameChanged?.(this.el.nameInput.value);
-      });
-    }
+    const submitName = () => {
+      const v = (this.el.namePromptInput?.value || "").trim();
+      if (!v) { this.el.namePromptInput?.focus(); return; }
+      this.handlers.nameSubmit?.(v);
+    };
+    this.el.namePromptGo?.addEventListener("click", submitName);
+    this.el.namePromptInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitName();
+      else if (e.key === "Escape") this.handlers.nameCancel?.();
+    });
+    this.el.namePromptBack?.addEventListener("click", () => this.handlers.nameCancel?.());
     document.querySelectorAll("#lobby [data-mode]").forEach((b) => {
       b.addEventListener("click", () => this.handlers.setMode?.(b.dataset.mode));
     });
@@ -197,6 +203,18 @@ export class UI {
       if (this.el[k]) this.el[k].classList.toggle("hidden", !names.includes(k));
     }
     this.el.hud.classList.toggle("hidden", names.includes("menu") || names.includes("join") || names.includes("gameover") || names.includes("lobby") || names.includes("connecting"));
+  }
+
+  showNamePrompt(initial = "") {
+    if (!this.el.namePrompt) return;
+    this.el.namePrompt.classList.remove("hidden");
+    if (this.el.namePromptInput) {
+      this.el.namePromptInput.value = initial;
+      setTimeout(() => { this.el.namePromptInput.focus(); this.el.namePromptInput.select?.(); }, 30);
+    }
+  }
+  hideNamePrompt() {
+    this.el.namePrompt?.classList.add("hidden");
   }
 
   setConnectingStatus(text, sub) {
@@ -368,24 +386,6 @@ export class UI {
   }
 
   setNetStatus(text) { this.el.netStatus.textContent = text; }
-
-  setName(name) {
-    if (this.el.nameInput && this.el.nameInput.value !== name) {
-      this.el.nameInput.value = name;
-    }
-  }
-
-  setOnlineEnabled(enabled) {
-    for (const b of [this.el.mpJoinBtn, this.el.mpCreateBtn]) {
-      if (!b) continue;
-      b.disabled = !enabled;
-      b.classList.toggle("disabled", !enabled);
-    }
-    if (this.el.nameHint) {
-      this.el.nameHint.textContent = enabled ? "READY" : "REQUIRED FOR ONLINE";
-      this.el.nameHint.classList.toggle("ok", !!enabled);
-    }
-  }
 
   hideHudStatus() {
     const el = document.getElementById("hud-status");

@@ -137,12 +137,21 @@ mountCheats({
 ui.showOnly("menu");
 ui.setNetStatus("");
 
-ui.setName(myName);
-ui.setOnlineEnabled(hasName());
-ui.on("nameChanged", (raw) => {
-  myName = sanitizeName(raw);
+let _pendingOnlineAction = null;
+ui.on("nameSubmit", (raw) => {
+  const next = sanitizeName(raw);
+  if (!next) return;
+  myName = next;
   saveName(myName);
-  ui.setOnlineEnabled(hasName());
+  ui.hideNamePrompt();
+  const pending = _pendingOnlineAction;
+  _pendingOnlineAction = null;
+  if (pending === "mp-create") createLobby();
+  else if (pending === "mp-join") openJoin();
+});
+ui.on("nameCancel", () => {
+  _pendingOnlineAction = null;
+  ui.hideNamePrompt();
 });
 ui.on("action", onMenuAction);
 ui.on("setMode", (m) => {
@@ -176,15 +185,14 @@ ui.on("equip", (wid) => {
 function onMenuAction(action) {
   if (action === "solo-horde") startSolo("horde");
   else if (action === "solo-arsenal") startSolo("arsenal");
-  else if (action === "mp-create") { if (requireName()) createLobby(); }
-  else if (action === "mp-join")   { if (requireName()) openJoin(); }
+  else if (action === "mp-create") { if (hasName()) createLobby(); else promptNameFor("mp-create"); }
+  else if (action === "mp-join")   { if (hasName()) openJoin();    else promptNameFor("mp-join"); }
   else if (action === "set-server") promptServerUrl();
 }
 
-function requireName() {
-  if (hasName()) return true;
-  ui.el.nameInput?.focus();
-  return false;
+function promptNameFor(action) {
+  _pendingOnlineAction = action;
+  ui.showNamePrompt(myName);
 }
 
 function refreshServerLabel() {
@@ -260,7 +268,7 @@ function openJoin() {
 }
 
 async function joinSubmit(code) {
-  if (!hasName()) { alert("Enter a callsign on the main menu before joining."); leaveToMenu(); return; }
+  if (!hasName()) { alert("Enter a callsign before joining."); leaveToMenu(); return; }
   code = (code || "").toUpperCase();
   if (!/^[A-Z0-9]{4}$/.test(code)) { alert("Code must be 4 chars."); return; }
   ui.showOnly("lobby");
@@ -820,6 +828,8 @@ function processEvents(sim) {
       audio.playVoltspike(spatial(e.x, e.y));
     } else if (e.type === "sonic-ring") {
       audio.playSonic(spatial(e.x, e.y));
+    } else if (e.type === "bullet-hit") {
+      if (!mp && e.ownerId === localId) recordHit(e.x, e.y);
     } else if (e.type === "down") {
       const p = sim.players.get(e.id);
       ui.pushKillFeed(`⚠ <span class="pname" style="color:${p?.color || "var(--magenta)"}">${escapeHtml(p?.name ?? "—")}</span> DOWNED · HOLD F`, { warn: true });

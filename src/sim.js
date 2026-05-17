@@ -418,7 +418,7 @@ function tryShoot(sim, p, input) {
     startReload(sim, p);
     return;
   }
-  const rate = w.rate * rateMulFor(p);
+  const rate = w.rate * rateMulFor(p) * (p.fireRateMul ?? 1);
   if (!p.noDelay && now - p.lastShotAt < rate) return;
   p.lastShotAt = now;
   sim.events.push({ type: "shoot", playerId: p.id, weapon: p.weapon, x: p.x, y: p.y });
@@ -473,7 +473,7 @@ function tryShoot(sim, p, input) {
         weapon: p.weapon,
         packed,
         dmg: w.dmg * dmgMulFor(p),
-        range: w.range,
+        range: w.range * (p.rangeMul ?? 1),
         traveled: 0,
       });
     }
@@ -914,6 +914,7 @@ function updateBullets(sim, dt) {
     if (hit) {
       const owner = sim.players.get(b.ownerId);
       if (owner?.stats) owner.stats.shotsHit += 1;
+      sim.events.push({ type: "bullet-hit", ownerId: b.ownerId, x: nx, y: ny });
       if (b.weapon === "rocket") {
         rocketExplode(sim, nx, ny, b);
       } else if (b.weapon === "voltspike" && hit.zombie) {
@@ -1333,7 +1334,12 @@ function updatePlayers(sim, dt) {
     const speed = moveSpeedFor(p);
     const dx = input.mx * speed * dt;
     const dy = input.my * speed * dt;
-    moveWithCollisions(sim, p, PLAYER_R, dx, dy);
+    if (p.noClip) {
+      p.x = Math.max(PLAYER_R, Math.min(MAP_W - PLAYER_R, p.x + dx));
+      p.y = Math.max(PLAYER_R, Math.min(MAP_H - PLAYER_R, p.y + dy));
+    } else {
+      moveWithCollisions(sim, p, PLAYER_R, dx, dy);
+    }
     p.angle = Math.atan2(input.aimY - p.y, input.aimX - p.x);
     if (input.reload) startReload(sim, p);
     if (input.shoot) tryShoot(sim, p, input);
@@ -1401,8 +1407,8 @@ function openCrate(sim, p) {
   if (p.crateOpenedAt) return;
   if (p.crateResultPending) return;
   if (sim.crateBoom) return; // Crate is mid-detonation.
-  if (p.cash < CRATE_COST) return;
-  p.cash -= CRATE_COST;
+  if (!p.infMoney && p.cash < CRATE_COST) return;
+  if (!p.infMoney) p.cash -= CRATE_COST;
   if (p.stats) p.stats.cratesOpened += 1;
   const roll = Math.random();
   let result = null;
@@ -1431,8 +1437,8 @@ function openCrate(sim, p) {
 
 function buyBarricade(sim, p) {
   if (sim.barricadeDown) return;
-  if (p.cash < BARRICADE_COST) return;
-  p.cash -= BARRICADE_COST;
+  if (!p.infMoney && p.cash < BARRICADE_COST) return;
+  if (!p.infMoney) p.cash -= BARRICADE_COST;
   sim.barricadeDown = true;
   rebuildNav(sim);
   sim.events.push({ type: "barricade", playerId: p.id });
@@ -1440,11 +1446,11 @@ function buyBarricade(sim, p) {
 
 function packCurrentWeapon(sim, p) {
   if (sim.wave < PAP_MIN_WAVE) return;
-  if (p.cash < PAP_COST) return;
+  if (!p.infMoney && p.cash < PAP_COST) return;
   const id = p.slots[p.activeSlot];
   if (!id) return;
   if (p.slotPacked[p.activeSlot]) return;
-  p.cash -= PAP_COST;
+  if (!p.infMoney) p.cash -= PAP_COST;
   p.slotPacked[p.activeSlot] = true;
   // Top off ammo so the buff is immediately felt.
   const w = weaponEff(p);
@@ -1595,9 +1601,9 @@ export function shopBuy(sim, playerId, itemId) {
   const item = SHOP_ITEMS.find((i) => i.id === itemId);
   if (!item) return false;
   const cost = item.cost(p, sim);
-  if (p.cash < cost) return false;
+  if (!p.infMoney && p.cash < cost) return false;
   if (!item.canBuy(p, sim)) return false;
-  p.cash -= cost;
+  if (!p.infMoney) p.cash -= cost;
   item.apply(p, sim);
   sim.events.push({ type: "buy", playerId: p.id, itemId, itemName: item.name, cost });
   return true;

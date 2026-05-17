@@ -11,7 +11,9 @@ money            — Set your cash to $999,999.
 max money        — Alias for "money".
 
 god              — Toggle full god mode: invincible, 10× fire rate,
-                   3× move speed, no reload, bottomless mag.
+                   3× move speed, no reload, bottomless mag, noclip
+                   (walk through walls), effectively infinite range,
+                   and infinite money (no shop/crate/PaP cost).
 invincible       — Alias for "god".
 invincibility    — Alias for "god".
 

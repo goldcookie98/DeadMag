@@ -165,44 +165,6 @@ html, body {
 .menu-buttons { display: flex; flex-direction: column; gap: 10px; max-width: 480px; margin-top: 24px; }
 .menu-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-.menu-name-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  border: 1px solid var(--dim2);
-  background: rgba(28,11,54,0.4);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 100%, 10px 100%);
-}
-.menu-name-label {
-  font-family: var(--display);
-  font-size: 16px;
-  letter-spacing: 0.2em;
-  color: var(--cyan);
-}
-.menu-name-input {
-  font-family: var(--display);
-  background: transparent;
-  color: var(--fg);
-  border: none;
-  outline: none;
-  padding: 4px 0;
-  font-size: 22px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  width: 100%;
-}
-.menu-name-input::placeholder { color: var(--dim); letter-spacing: 0.15em; }
-.menu-name-input:focus { color: var(--cyan); text-shadow: 0 0 12px rgba(46,255,229,0.45); }
-.menu-name-hint {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.25em;
-  color: var(--magenta);
-  white-space: nowrap;
-}
-.menu-name-hint.ok { color: var(--acid); }
 .vbtn[disabled], .vbtn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -484,6 +446,30 @@ html, body {
 #join-code:focus { border-color: var(--yellow); box-shadow: 0 0 18px rgba(255,224,62,0.3); }
 .join-hint { color: var(--dim); font-size: 11px; letter-spacing: 0.2em; margin-top: 4px; }
 .join-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+
+/* ──────────────────────────── CALLSIGN PROMPT ──────────────────────────── */
+#name-prompt { display: flex; align-items: center; justify-content: center; }
+.name-panel { width: 440px; padding: 24px 28px; }
+#name-prompt-input {
+  display: block;
+  width: 100%;
+  font-family: var(--display);
+  background: transparent;
+  color: var(--cyan);
+  border: 1px solid var(--dim2);
+  padding: 14px 16px;
+  font-size: 36px;
+  margin: 8px 0;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  text-shadow: 0 0 18px rgba(46,255,229,0.4);
+  outline: none;
+  box-sizing: border-box;
+}
+#name-prompt-input:focus { border-color: var(--cyan); box-shadow: 0 0 18px rgba(46,255,229,0.3); }
+#name-prompt-input::placeholder { color: var(--dim); letter-spacing: 0.18em; }
+.name-hint { color: var(--dim); font-size: 11px; letter-spacing: 0.2em; margin-top: 4px; }
 
 /* ──────────────────────────── SHOP ──────────────────────────── */
 .shop-header {

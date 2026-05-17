@@ -58,11 +58,15 @@ export function applyCheat(code, { sim, localId }) {
     case "invincible":
     case "invincibility":
       me.invincible = !me.invincible;
-      me.noDelay = me.invincible;
       me.infAmmo = me.invincible;
+      me.fireRateMul = me.invincible ? 0.1 : 1;
       me.speedMul = me.invincible ? 3 : 1;
+      me.noClip = me.invincible;
+      me.infMoney = me.invincible;
+      me.rangeMul = me.invincible ? 1000 : 1;
+      if (me.invincible) me.cash = Math.max(me.cash, 999999);
       return { ok: true, message: me.invincible
-        ? "god ON · invincible · 10× fire · 3× speed · no reload · no clip."
+        ? "god ON · invincible · 10× fire · 3× speed · no reload · noclip · ∞ range · $$$."
         : "god OFF." };
 
     case "one shot":
