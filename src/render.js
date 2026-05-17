@@ -347,7 +347,8 @@ function drawBarricade(ctx, b) {
 }
 
 function drawProps(ctx, sim, localId) {
-  drawCrate(ctx, CRATE, sim.timeMs);
+  const crateRect = sim.crateRect || CRATE;
+  drawCrate(ctx, crateRect, sim.timeMs);
   drawPap(ctx, PAP, sim?.wave ?? 0, sim.timeMs);
 
   const me = sim.players.get(localId);
@@ -355,13 +356,16 @@ function drawProps(ctx, sim, localId) {
   // The CS:GO-style spin renders above the crate (in world coords) so it
   // doesn't lock the screen.
   for (const [, p] of sim.players) {
-    if (p.crateOpenedAt) drawCrateSpin(ctx, p, sim.timeMs);
+    if (p.crateOpenedAt) drawCrateSpin(ctx, p, sim.timeMs, crateRect);
   }
   // Floating "TAKE [WEAPON]" reward above the crate for any player with a
   // pending pickup.
   for (const [, p] of sim.players) {
-    if (p.crateResultPending && p.id === localId) drawCratePending(ctx, p.crateResultPending, sim.timeMs);
+    if (p.crateResultPending && p.id === localId) drawCratePending(ctx, p.crateResultPending, sim.timeMs, crateRect);
   }
+
+  // BOOM countdown — visible to all players while the crate is fused.
+  if (sim.crateBoom) drawCrateBoomCountdown(ctx, sim.crateBoom, sim.timeMs);
 
   // Proximity F-prompts for the local player.
   if (!me || me.state !== "alive" || me.crateOpenedAt) return;
@@ -369,7 +373,7 @@ function drawProps(ctx, sim, localId) {
     ? `TAKE ${WEAPONS[me.crateResultPending]?.name || me.crateResultPending.toUpperCase()}`
     : "OPEN CRATE · $950";
   const candidates = [
-    { rect: CRATE, label: crateLabel, color: VOLT.yellow },
+    { rect: crateRect, label: crateLabel, color: VOLT.yellow },
     { rect: PAP, label: sim.wave < PAP_MIN_WAVE
         ? `PACK-A-PUNCH · UNLOCKS W${PAP_MIN_WAVE}`
         : (me.slotPacked?.[me.activeSlot] ? "ALREADY PACKED" : "PACK · $10,000"),
@@ -384,7 +388,7 @@ function drawProps(ctx, sim, localId) {
     const d = Math.hypot(me.x - cx, me.y - cy);
     if (d > INTERACT_RANGE) continue;
     // Lift prompt above pending reward floater so they don't overlap.
-    const yLift = (c.rect === CRATE && me.crateResultPending) ? 56 : 12;
+    const yLift = (c.rect === crateRect && me.crateResultPending) ? 56 : 12;
     drawInteractPrompt(ctx, cx, c.rect.y - yLift, c.label, c.color);
   }
 }
@@ -405,8 +409,12 @@ function getWeaponIcon(wid) {
   const svg = WEAPON_SVG[wid];
   if (!svg) { _weaponIconCache[wid] = null; return null; }
   // The HUD SVGs use CSS vars (var(--cyan)) and currentColor; substitute the
-  // VOLT palette literally so the raster works without a stylesheet.
+  // VOLT palette literally so the raster works without a stylesheet. The HUD
+  // markup also omits xmlns / width / height — without intrinsic dimensions
+  // the rasterised Image has naturalWidth=0 and canvas drawImage silently
+  // draws nothing.
   const resolved = svg
+    .replace(/<svg /, '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80" ')
     .replace(/var\(--cyan\)/g, VOLT.cyan)
     .replace(/var\(--magenta\)/g, VOLT.magenta)
     .replace(/var\(--acid\)/g, VOLT.acid)
@@ -431,7 +439,7 @@ function getCrateStripCells(playerId, openedAt, result, blowUp) {
   return cells;
 }
 
-function drawCrateSpin(ctx, p, simTimeMs) {
+function drawCrateSpin(ctx, p, simTimeMs, crateRect = CRATE) {
   const elapsed = Math.max(0, simTimeMs - p.crateOpenedAt);
   const ratio = Math.max(0, Math.min(1, elapsed / CRATE_ANIM_MS));
   const eased = 1 - Math.pow(1 - ratio, 3);
@@ -439,9 +447,9 @@ function drawCrateSpin(ctx, p, simTimeMs) {
   const offset = eased * finalOffset;
   const cells = getCrateStripCells(p.id, p.crateOpenedAt, p.crateResult, p.crateBlowUp);
 
-  const cx = CRATE.x + CRATE.w / 2;
+  const cx = crateRect.x + crateRect.w / 2;
   const boxX = cx - CRATE_SPIN_W / 2;
-  const boxY = CRATE.y - CRATE_SPIN_H - 18;
+  const boxY = crateRect.y - CRATE_SPIN_H - 18;
 
   ctx.save();
   // Backing.
@@ -493,9 +501,9 @@ function drawCrateSpin(ctx, p, simTimeMs) {
   ctx.restore();
 }
 
-function drawCratePending(ctx, weaponId, timeMs) {
-  const cx = CRATE.x + CRATE.w / 2;
-  const cy = CRATE.y - 32;
+function drawCratePending(ctx, weaponId, timeMs, crateRect = CRATE) {
+  const cx = crateRect.x + crateRect.w / 2;
+  const cy = crateRect.y - 32;
   const bob = Math.sin(timeMs * 0.005) * 3;
   ctx.save();
   ctx.font = "bold 11px JetBrains Mono, monospace";
@@ -514,6 +522,35 @@ function drawCratePending(ctx, weaponId, timeMs) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = VOLT.acid;
   ctx.fillText(label, cx, cy + bob);
+  ctx.restore();
+}
+
+function drawCrateBoomCountdown(ctx, boom, timeMs) {
+  const remainMs = Math.max(0, boom.endsAt - timeMs);
+  const secs = Math.ceil(remainMs / 1000);
+  // Flash speeds up as we approach zero.
+  const flashHz = 2 + (1 - Math.min(1, remainMs / 3000)) * 8;
+  const flash = 0.5 + 0.5 * Math.sin(timeMs * 0.001 * Math.PI * 2 * flashHz);
+  const cx = boom.x;
+  const cy = boom.y - 44;
+  ctx.save();
+  // Pulsing danger ring around the crate.
+  ctx.strokeStyle = VOLT.magenta;
+  ctx.lineWidth = 2 + flash * 2;
+  ctx.globalAlpha = 0.5 + flash * 0.5;
+  ctx.shadowColor = VOLT.magenta;
+  ctx.shadowBlur = 14;
+  ctx.beginPath();
+  ctx.arc(boom.x, boom.y, 30 + flash * 6, 0, Math.PI * 2);
+  ctx.stroke();
+  // Countdown label.
+  ctx.shadowBlur = 12;
+  ctx.globalAlpha = 1;
+  ctx.font = "bold 22px Anton, Impact, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = VOLT.magenta;
+  ctx.fillText(`BOOM ${secs}`, cx, cy);
   ctx.restore();
 }
 

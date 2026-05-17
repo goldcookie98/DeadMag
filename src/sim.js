@@ -38,6 +38,8 @@ const INTERACT_RANGE = 64;
 const CRATE_COST = 950;
 const CRATE_ANIM_MS = 3500;
 const CRATE_BLOW_UP_DMG = 60;
+const CRATE_BOOM_COUNTDOWN_MS = 3000;
+const CRATE_BOOM_RADIUS = 110;
 const BARRICADE_COST = 1000;
 const PAP_COST = 10000;
 const PAP_MIN_WAVE = 5;
@@ -221,6 +223,10 @@ export function createSim(mode = "horde") {
     gameOver: false,
     winnerId: null,
     barricadeDown: false,
+    // Crate position is mutable — a BOOM result detonates the crate and
+    // teleports it to a new random spot in room 1.
+    crateRect: { x: CRATE.x, y: CRATE.y, w: CRATE.w, h: CRATE.h },
+    crateBoom: null, // { x, y, endsAt } when a boom countdown is active
     events: [],
     _nav: { grid: null, fields: new Map(), lastUpdateAt: -Infinity },
   };
@@ -287,6 +293,8 @@ export function serializeSim(sim) {
     gameOver: sim.gameOver,
     winnerId: sim.winnerId,
     barricadeDown: sim.barricadeDown,
+    crateRect: sim.crateRect,
+    crateBoom: sim.crateBoom,
     events: sim.events,
   };
 }
@@ -384,6 +392,7 @@ function tryShoot(sim, p, input) {
   const rate = w.rate * rateMulFor(p);
   if (!p.noDelay && now - p.lastShotAt < rate) return;
   p.lastShotAt = now;
+  sim.events.push({ type: "shoot", playerId: p.id, weapon: p.weapon, x: p.x, y: p.y });
 
   const dx = input.aimX - p.x;
   const dy = input.aimY - p.y;
@@ -412,7 +421,6 @@ function tryShoot(sim, p, input) {
     return;
   }
 
-  sim.events.push({ type: "shoot", playerId: p.id, weapon: p.weapon, x: p.x, y: p.y });
   const pellets = w.pellets || 1;
   const packed = !!p.slotPacked[p.activeSlot];
   const bursts = p.noDelay ? 10 : 1;
@@ -1277,7 +1285,7 @@ function pickInteractTarget(sim, p) {
   // while up; PaP only interactable from inside room 2 (which requires the
   // barricade to be down or the player to be standing in the doorway).
   const candidates = [];
-  const c = rectCenter(CRATE);
+  const c = rectCenter(sim.crateRect);
   if (nearPoint(p, c.x, c.y, INTERACT_RANGE)) candidates.push({ kind: "crate", d: Math.hypot(p.x - c.x, p.y - c.y) });
   const pp = rectCenter(PAP);
   if (nearPoint(p, pp.x, pp.y, INTERACT_RANGE)) candidates.push({ kind: "pap", d: Math.hypot(p.x - pp.x, p.y - pp.y) });
@@ -1316,6 +1324,7 @@ function acceptCrateResult(sim, p) {
 function openCrate(sim, p) {
   if (p.crateOpenedAt) return;
   if (p.crateResultPending) return;
+  if (sim.crateBoom) return; // Crate is mid-detonation.
   if (p.cash < CRATE_COST) return;
   p.cash -= CRATE_COST;
   const roll = Math.random();
@@ -1395,13 +1404,17 @@ function updateCrateAnims(sim) {
     if (sim.timeMs - p.crateOpenedAt < CRATE_ANIM_MS) continue;
     // Apply result.
     if (p.crateBlowUp) {
-      const sp = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-      p.x = sp.x; p.y = sp.y;
-      damagePlayer(sim, p, CRATE_BLOW_UP_DMG, null);
-      const cc = rectCenter(CRATE);
-      sim.explosions.push({ x: cc.x, y: cc.y, r: 110, t: sim.timeMs });
-      sim.events.push({ type: "crate-blowup", playerId: p.id, x: p.x, y: p.y });
-      sim.events.push({ type: "explosion", x: cc.x, y: cc.y, r: 110 });
+      // Start a 3-second countdown on the crate. The crate detonates when
+      // the timer expires (handled in updateCrateBoom) and relocates — the
+      // player is NOT teleported or damaged.
+      const cc = rectCenter(sim.crateRect);
+      sim.crateBoom = { x: cc.x, y: cc.y, endsAt: sim.timeMs + CRATE_BOOM_COUNTDOWN_MS };
+      sim.events.push({
+        type: "crate-boom-start",
+        playerId: p.id,
+        x: cc.x, y: cc.y,
+        endsAt: sim.crateBoom.endsAt,
+      });
     } else if (p.crateResult) {
       p.crateResultPending = p.crateResult;
       sim.events.push({ type: "crate-ready", playerId: p.id, weapon: p.crateResult });
@@ -1410,6 +1423,56 @@ function updateCrateAnims(sim) {
     p.crateResult = null;
     p.crateBlowUp = false;
   }
+}
+
+function pointInRect(x, y, r) {
+  return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+}
+
+function pickRandomCrateLocation(sim) {
+  const w = sim.crateRect.w, h = sim.crateRect.h;
+  // Keep the crate inside room 1, away from the perimeter walls, the doorway,
+  // and the PaP. Treat the crate as a circle for the wall collision query so
+  // we re-use the existing solver.
+  const r = Math.hypot(w / 2, h / 2) + 20;
+  const minX = 60, maxX = ROOM1_W - 60 - w;
+  const minY = 60, maxY = MAP_H - 60 - h;
+  for (let tries = 0; tries < 80; tries++) {
+    const x = minX + Math.random() * (maxX - minX);
+    const y = minY + Math.random() * (maxY - minY);
+    const cx = x + w / 2, cy = y + h / 2;
+    if (collideCircleWalls(sim, cx, cy, r)) continue;
+    if (pointInRect(cx, cy, DOORWAY)) continue;
+    // Don't drop on a player either — would be obnoxious.
+    let onPlayer = false;
+    for (const [, p] of sim.players) {
+      if (Math.hypot(p.x - cx, p.y - cy) < r + PLAYER_R) { onPlayer = true; break; }
+    }
+    if (onPlayer) continue;
+    return { x, y, w, h };
+  }
+  // Fallback to the original spot if we somehow can't place it.
+  return { x: CRATE.x, y: CRATE.y, w, h };
+}
+
+function updateCrateBoom(sim) {
+  if (!sim.crateBoom) return;
+  if (sim.timeMs < sim.crateBoom.endsAt) return;
+  const { x, y } = sim.crateBoom;
+  // Detonate at the current crate location.
+  sim.explosions.push({ x, y, r: CRATE_BOOM_RADIUS, t: sim.timeMs });
+  sim.events.push({ type: "explosion", x, y, r: CRATE_BOOM_RADIUS });
+  // Catch zombies in the blast (players are spared — the blowup is a crate
+  // mechanic, not a player punishment).
+  for (const z of [...sim.zombies]) {
+    if (Math.hypot(z.x - x, z.y - y) <= CRATE_BOOM_RADIUS) {
+      damageZombie(sim, z, CRATE_BLOW_UP_DMG, null);
+    }
+  }
+  // Move the crate to a new random valid spot.
+  sim.crateRect = pickRandomCrateLocation(sim);
+  sim.events.push({ type: "crate-moved", x: sim.crateRect.x, y: sim.crateRect.y });
+  sim.crateBoom = null;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -1426,6 +1489,7 @@ export function step(sim, dt) {
   updateBots(sim, dt);
   updateInteractions(sim);
   updateCrateAnims(sim);
+  updateCrateBoom(sim);
   updatePlayers(sim, dt);
   updateCharges(sim);
   updateBullets(sim, dt);
