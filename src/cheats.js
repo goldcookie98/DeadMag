@@ -64,6 +64,7 @@ export function applyCheat(code, { sim, localId }) {
       me.noClip = me.invincible;
       me.infMoney = me.invincible;
       me.rangeMul = me.invincible ? 1000 : 1;
+      me.noDelay = false;
       if (me.invincible) me.cash = Math.max(me.cash, 999999);
       return { ok: true, message: me.invincible
         ? "god ON · invincible · 10× fire · 3× speed · no reload · noclip · ∞ range · $$$."

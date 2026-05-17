@@ -456,27 +456,22 @@ function tryShoot(sim, p, input) {
 
   const pellets = w.pellets || 1;
   const packed = !!p.slotPacked[p.activeSlot];
-  const bursts = p.noDelay ? 10 : 1;
-  // Count each projectile (pellet × burst) as a shot for accuracy. Melee swings
-  // are counted separately in the melee branch above.
-  if (p.stats) p.stats.shotsFired += bursts * pellets;
-  for (let b = 0; b < bursts; b++) {
-    for (let i = 0; i < pellets; i++) {
-      const angle = baseAngle + (Math.random() - 0.5) * w.spread * 2;
-      sim.bullets.push({
-        id: nextId(),
-        x: p.x + Math.cos(angle) * (PLAYER_R + 4),
-        y: p.y + Math.sin(angle) * (PLAYER_R + 4),
-        vx: Math.cos(angle) * w.proj,
-        vy: Math.sin(angle) * w.proj,
-        ownerId: p.id,
-        weapon: p.weapon,
-        packed,
-        dmg: w.dmg * dmgMulFor(p),
-        range: w.range * (p.rangeMul ?? 1),
-        traveled: 0,
-      });
-    }
+  if (p.stats) p.stats.shotsFired += pellets;
+  for (let i = 0; i < pellets; i++) {
+    const angle = baseAngle + (Math.random() - 0.5) * w.spread * 2;
+    sim.bullets.push({
+      id: nextId(),
+      x: p.x + Math.cos(angle) * (PLAYER_R + 4),
+      y: p.y + Math.sin(angle) * (PLAYER_R + 4),
+      vx: Math.cos(angle) * w.proj,
+      vy: Math.sin(angle) * w.proj,
+      ownerId: p.id,
+      weapon: p.weapon,
+      packed,
+      dmg: w.dmg * dmgMulFor(p),
+      range: w.range * (p.rangeMul ?? 1),
+      traveled: 0,
+    });
   }
   if (!p.infAmmo) {
     p.ammo -= 1;
