@@ -8,6 +8,7 @@ import { WEAPONS, ARSENAL_ORDER } from "./weapons.js";
 import { WALLS, MAP_W, MAP_H } from "./map.js";
 import { mountVersion } from "./version-display.js";
 import { mountCheats, applyCheat } from "./cheats.js";
+import { mountSkinShop, openSkinShop, closeSkinShop, hasUnopenedCrate, getSkinCount } from "./skinshop.js";
 import * as audio from "./audio.js";
 
 const COLORS = ["#FF1F6E", "#2EFFE5", "#B6FF2E", "#FFE03E", "#5eff5e", "#ff8c2e", "#2eaaff", "#ff5edc"];
@@ -188,7 +189,38 @@ function onMenuAction(action) {
   else if (action === "mp-create") { if (hasName()) createLobby(); else promptNameFor("mp-create"); }
   else if (action === "mp-join")   { if (hasName()) openJoin();    else promptNameFor("mp-join"); }
   else if (action === "set-server") promptServerUrl();
+  else if (action === "shop") openShop();
 }
+
+const skinShopRoot = document.getElementById("skin-shop");
+if (skinShopRoot) {
+  mountSkinShop(skinShopRoot, {
+    onClose: () => {
+      skinShopRoot.classList.add("hidden");
+      ui.showOnly("menu");
+      refreshShopButton();
+    },
+  });
+}
+function openShop() {
+  ui.showOnly();
+  document.getElementById("hud")?.classList.add("hidden");
+  openSkinShop();
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && skinShopRoot && !skinShopRoot.classList.contains("hidden")) {
+    skinShopRoot.classList.add("hidden");
+    ui.showOnly("menu");
+    refreshShopButton();
+  }
+});
+function refreshShopButton() {
+  const sub = document.getElementById("menu-shop-sub");
+  const badge = document.getElementById("menu-shop-badge");
+  if (sub) sub.textContent = `12 SKINS · ${getSkinCount()}/12 UNLOCKED${hasUnopenedCrate() ? " · 1 UNOPENED" : ""}`;
+  if (badge) badge.classList.toggle("hidden", !hasUnopenedCrate());
+}
+refreshShopButton();
 
 function promptNameFor(action) {
   _pendingOnlineAction = action;

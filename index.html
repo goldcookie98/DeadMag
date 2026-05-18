@@ -104,6 +104,10 @@
             <button class="vbtn vbtn-yellow" data-action="mp-create">
               <span class="vbtn-label">CREATE LOBBY</span><span class="vbtn-sub">HOST A ROOM</span><span class="vbtn-arrow">▶</span>
             </button>
+            <button class="vbtn vbtn-shop" data-action="shop" id="menu-shop-btn">
+              <span class="vbtn-label">SHOP · CRATES</span><span class="vbtn-sub" id="menu-shop-sub">12 SKINS · 3 ULTRA RARE</span><span class="vbtn-arrow">▶</span>
+              <span class="vbtn-shop-badge" id="menu-shop-badge">+ NEW</span>
+            </button>
             <button class="vbtn vbtn-thin" data-action="set-server" id="set-server-btn">
               <span class="vbtn-label-small">SERVER</span><span class="vbtn-sub-right" id="set-server-current">not set</span>
             </button>
@@ -323,6 +327,8 @@
         </div>
       </div>
     </div>
+
+    <div id="skin-shop" class="overlay hidden"></div>
 
     <div id="cheat" class="overlay hidden">
       <div class="panel">
